@@ -10,6 +10,18 @@ Working agreements for contributors (human or agent): [`CLAUDE.md`](CLAUDE.md).
 ## Setup
 
 ```bash
+make bootstrap   # deps, .env, database, SEC ingest, concept map, metrics
+make run         # read-only UI on 127.0.0.1:8501
+```
+
+`make` on its own lists every target. `make check` is what CI runs (lint plus
+tests); `make coverage` reports concept resolution and exits non-zero below 95%.
+Override the defaults inline, e.g. `make run PORT=9000` or
+`make metrics AS_OF=2024-01-01`.
+
+The equivalent by hand:
+
+```bash
 uv sync --all-extras    # the dev/CI setup; plain `uv sync` omits the LLM, research and UI extras
 cp .env.example .env    # then set FINLAB_SEC_USER_AGENT to a real contact address
 uv run finlab db init
