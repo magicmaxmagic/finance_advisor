@@ -10,7 +10,11 @@ dependencies = [
     # warehouse
     "duckdb>=1.1,<2",
     "polars>=1.0",
-    "pyarrow>=16.0",
+    # Capped below 25: pyarrow 25.0.0 segfaults converting a pandas DataFrame to
+    # Arrow on Streamlit's script thread, which kills the UI on the second
+    # rerun (any slider move). Reproducible with a five-line Streamlit app and
+    # no finlab code at all; 24.0.0 and 21.0.0 are clean. Re-test before lifting.
+    "pyarrow>=16.0,<25",
     # http / retry
     "httpx>=0.27",
     "tenacity>=8.2",

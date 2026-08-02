@@ -21,7 +21,7 @@ from datetime import date
 
 import altair as alt
 import duckdb
-import polars as pl
+import pandas as pd
 import streamlit as st
 
 from finlab.config import get_settings
@@ -79,31 +79,31 @@ def _has_prices() -> bool:
 
 
 @st.cache_data(show_spinner=False)
-def _companies() -> pl.DataFrame:
+def _companies() -> pd.DataFrame:
     with _reader() as con:
         return q.companies(con)
 
 
 @st.cache_data(show_spinner=False)
-def _screen(as_of: date) -> pl.DataFrame:
+def _screen(as_of: date) -> pd.DataFrame:
     with _reader() as con:
         return q.screen(con, as_of)
 
 
 @st.cache_data(show_spinner=False)
-def _history(cik: int, as_of: date) -> pl.DataFrame:
+def _history(cik: int, as_of: date) -> pd.DataFrame:
     with _reader() as con:
         return q.company_history(con, cik, as_of, HISTORY_CONCEPTS)
 
 
 @st.cache_data(show_spinner=False)
-def _percentiles(cik: int, as_of: date) -> pl.DataFrame:
+def _percentiles(cik: int, as_of: date) -> pd.DataFrame:
     with _reader() as con:
         return q.company_metrics_with_percentile(con, cik, as_of)
 
 
 @st.cache_data(show_spinner=False)
-def _candidates(cik: int) -> pl.DataFrame:
+def _candidates(cik: int) -> pd.DataFrame:
     with _reader() as con:
         return q.restatement_candidates(con, cik)
 
@@ -111,7 +111,7 @@ def _candidates(cik: int) -> pl.DataFrame:
 @st.cache_data(show_spinner=False)
 def _revisions(
     cik: int, canonical: str, period_end: date, as_of: date, duration_bucket: str
-) -> pl.DataFrame:
+) -> pd.DataFrame:
     with _reader() as con:
         return q.restatement_history(con, cik, canonical, period_end, as_of, duration_bucket)
 
@@ -157,18 +157,15 @@ companies = _companies()
 
 if page == "Screen":
     st.header("Screen")
-    st.caption(f"All {companies.height} companies as of {as_of}, one row each.")
+    st.caption(f"All {len(companies)} companies as of {as_of}, one row each.")
 
     frame = _screen(as_of)
-    chosen = st.multiselect("Sector", sorted(set(companies["sector"].to_list())))
+    chosen = st.multiselect("Sector", sorted(companies["sector"].unique()))
     if chosen:
-        frame = frame.filter(pl.col("sector").is_in(chosen))
+        frame = frame[frame["sector"].isin(chosen)]
 
-    # to_pandas() explicitly: Streamlit's own polars conversion path segfaults
-    # inside pyarrow on these frames, while polars' own Arrow-backed conversion
-    # is fine.
     st.dataframe(
-        frame.to_pandas(),
+        frame,
         hide_index=True,
         column_config={
             "market_cap": st.column_config.NumberColumn("market cap", format="compact"),
@@ -184,7 +181,7 @@ if page == "Screen":
     )
     st.download_button(
         "Download CSV",
-        frame.write_csv(),
+        frame.to_csv(index=False),
         file_name=f"finlab-screen-{as_of}.csv",
         mime="text/csv",
     )
@@ -193,20 +190,22 @@ if page == "Screen":
 
 elif page == "Company":
     st.header("Company")
-    ticker = st.selectbox("Ticker", companies["ticker"].to_list())
-    row = companies.filter(pl.col("ticker") == ticker).row(0, named=True)
+    ticker = st.selectbox("Ticker", companies["ticker"].tolist())
+    row = companies[companies["ticker"] == ticker].iloc[0]
     cik = int(row["cik"])
     st.subheader(f"{row['name']} · {row['sector']} · CIK {cik}")
 
     history = _history(cik, as_of)
-    if history.is_empty():
+    if history.empty:
         st.info(f"No annual figures were on file for {ticker} as of {as_of}.")
     else:
-        revenue = history.filter(pl.col("canonical") == "revenue")
-        present = set(history["canonical"].unique().to_list())
-        wide = history.pivot(on="canonical", index="period_end", values="value")
-        margin_columns = [
-            (pl.col(c) / pl.col("revenue")).alias(f"{c} margin")
+        revenue = history[history["canonical"] == "revenue"]
+        present = set(history["canonical"].unique())
+        wide = history.pivot_table(
+            index="period_end", columns="canonical", values="value", aggfunc="max"
+        )
+        margins = [
+            c
             for c in ("gross_profit", "operating_income", "net_income")
             if c in present and "revenue" in present
         ]
@@ -215,7 +214,7 @@ elif page == "Company":
         with left:
             st.caption("Revenue (annual)")
             st.altair_chart(
-                alt.Chart(revenue.select("period_end", "value").to_pandas())
+                alt.Chart(revenue[["period_end", "value"]])
                 .mark_line(point=True)
                 .encode(
                     x=alt.X("period_end:T", title=None),
@@ -223,19 +222,19 @@ elif page == "Company":
                     tooltip=["period_end:T", alt.Tooltip("value:Q", format=",.0f")],
                 )
                 .properties(height=280),
-                use_container_width=True,
+                width="stretch",
             )
         with right:
             st.caption("Margins (annual)")
-            if margin_columns:
+            if margins:
+                ratios = pd.DataFrame({f"{c} margin": wide[c] / wide["revenue"] for c in margins})
                 long = (
-                    wide.with_columns(margin_columns)
-                    .select(["period_end", *[c.meta.output_name() for c in margin_columns]])
-                    .unpivot(index="period_end", variable_name="margin", value_name="value")
-                    .drop_nulls()
+                    ratios.reset_index()
+                    .melt(id_vars="period_end", var_name="margin", value_name="value")
+                    .dropna()
                 )
                 st.altair_chart(
-                    alt.Chart(long.to_pandas())
+                    alt.Chart(long)
                     .mark_line(point=True)
                     .encode(
                         x=alt.X("period_end:T", title=None),
@@ -248,18 +247,18 @@ elif page == "Company":
                         ],
                     )
                     .properties(height=280),
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.info("No margin inputs resolve for this company.")
 
     st.subheader("Metrics vs sector")
     percentiles = _percentiles(cik, as_of)
-    if percentiles.is_empty():
+    if percentiles.empty:
         st.info("No metrics resolve for this company at the selected date.")
     else:
         st.dataframe(
-            percentiles.to_pandas(),
+            percentiles,
             hide_index=True,
             column_config={
                 "metric_name": "metric",
@@ -276,19 +275,19 @@ elif page == "Company":
         "Which filing each figure came from. A number with no filing behind it is "
         "not a number this system will show."
     )
-    if not history.is_empty():
+    if not history.empty:
         st.dataframe(
-            history.select(
-                "canonical",
-                "period_end",
-                "value",
-                "form",
-                "filed_date",
-                "accession_number",
-                "derived",
-            )
-            .sort(["period_end", "canonical"], descending=[True, False])
-            .to_pandas(),
+            history[
+                [
+                    "canonical",
+                    "period_end",
+                    "value",
+                    "form",
+                    "filed_date",
+                    "accession_number",
+                    "derived",
+                ]
+            ].sort_values(["period_end", "canonical"], ascending=[False, True]),
             hide_index=True,
             column_config={
                 "value": st.column_config.NumberColumn("value", format="compact"),
@@ -310,44 +309,42 @@ else:
         "still here, not overwritten."
     )
 
-    ticker = st.selectbox("Ticker", companies["ticker"].to_list())
-    row = companies.filter(pl.col("ticker") == ticker).row(0, named=True)
+    ticker = st.selectbox("Ticker", companies["ticker"].tolist())
+    row = companies[companies["ticker"] == ticker].iloc[0]
     cik = int(row["cik"])
 
     candidates = _candidates(cik)
-    if candidates.is_empty():
+    if candidates.empty:
         st.info(f"No figure has been reported more than once for {ticker}.")
         st.stop()
 
-    annual = candidates.filter(pl.col("duration_bucket") == "annual")
-    pool = annual if not annual.is_empty() else candidates
-    bucket = "annual" if not annual.is_empty() else pool["duration_bucket"].to_list()[0]
+    annual = candidates[candidates["duration_bucket"] == "annual"]
+    pool = annual if not annual.empty else candidates
+    bucket = "annual" if not annual.empty else pool["duration_bucket"].iloc[0]
 
-    concept = st.selectbox("Concept", sorted(set(pool["canonical"].to_list())))
+    concept = st.selectbox("Concept", sorted(pool["canonical"].unique()))
     periods = (
-        pool.filter(pl.col("canonical") == concept)
-        .sort("period_end", descending=True)["period_end"]
-        .to_list()
+        pool[pool["canonical"] == concept]
+        .sort_values("period_end", ascending=False)["period_end"]
+        .tolist()
     )
     period_end = st.selectbox("Fiscal period ending", periods)
 
     revisions = _revisions(cik, concept, period_end, as_of, bucket)
-    if revisions.is_empty():
+    if revisions.empty:
         st.warning(
             f"Nothing had been filed for {concept} / {period_end} as of {as_of}. "
             "Move the as-of date forward."
         )
         st.stop()
 
-    revisions = revisions.with_columns(
-        [
-            (pl.col("value") - pl.col("value").shift(1)).alias("delta"),
-            ((pl.col("value") / pl.col("value").shift(1)) - 1).alias("delta_pct"),
-        ]
+    revisions = revisions.assign(
+        delta=revisions["value"].diff(),
+        delta_pct=revisions["value"].pct_change(),
     )
 
     st.dataframe(
-        revisions.to_pandas(),
+        revisions,
         hide_index=True,
         column_config={
             "filed_date": "filed",
@@ -358,15 +355,15 @@ else:
         },
     )
 
-    distinct = revisions["value"].n_unique()
+    distinct = revisions["value"].nunique()
     st.metric(
         "Distinct values reported",
         distinct,
         help="More than one means this figure was restated.",
     )
     if distinct > 1:
-        values = revisions["value"].to_list()
-        filed = revisions["filed_date"].to_list()
+        values = revisions["value"].tolist()
+        filed = revisions["filed_date"].tolist()
         st.success(
             f"As of {as_of}, {ticker}'s {concept} for the period ending {period_end} "
             f"was first reported as {_fmt_money(values[0])} on {filed[0]} and most "
@@ -374,7 +371,7 @@ else:
         )
 
     st.altair_chart(
-        alt.Chart(revisions.select("filed_date", "value").to_pandas())
+        alt.Chart(revisions[["filed_date", "value"]])
         .mark_line(point=True)
         .encode(
             x=alt.X("filed_date:T", title="filed"),
@@ -387,5 +384,5 @@ else:
             tooltip=["filed_date:T", alt.Tooltip("value:Q", format=",.0f")],
         )
         .properties(height=260),
-        use_container_width=True,
+        width="stretch",
     )

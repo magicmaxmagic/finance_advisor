@@ -8,6 +8,13 @@ Everything here goes through `fundamentals_complete_asof(as_of)`. No query
 reads `fact` directly except the restatement history, which is *about* the
 filing history and therefore has to see every vintage rather than the resolved
 one.
+
+**These return pandas, not polars**, which is the one sanctioned exception to
+the project's polars default. Two reasons, both forced: Streamlit renders
+through pandas regardless, and DuckDB's `.pl()` conversion segfaults inside
+`polars.from_arrow` when called from Streamlit's script thread. Frames here are
+at most a few thousand rows of already-aggregated output, so none of the memory
+argument for polars applies. Transform code elsewhere stays on polars.
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from contextlib import contextmanager
 from datetime import date
 
 import duckdb
-import polars as pl
+import pandas as pd
 
 from finlab.config import Settings
 from finlab.core.metrics import METRIC_EXPRESSIONS, install_metric_macros
@@ -81,7 +88,7 @@ def sectors(con: duckdb.DuckDBPyConnection) -> list[str]:
         ]
 
 
-def companies(con: duckdb.DuckDBPyConnection) -> pl.DataFrame:
+def companies(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     with cursor(con) as cur:
         return cur.execute(
             """
@@ -89,10 +96,10 @@ def companies(con: duckdb.DuckDBPyConnection) -> pl.DataFrame:
         FROM entity e LEFT JOIN security s USING (cik)
         ORDER BY ticker
         """
-        ).pl()
+        ).df()
 
 
-def screen(con: duckdb.DuckDBPyConnection, as_of: date) -> pl.DataFrame:
+def screen(con: duckdb.DuckDBPyConnection, as_of: date) -> pd.DataFrame:
     """One row per company at `as_of`: identity, size, and every metric."""
     pivot = ",\n               ".join(
         f"max(m.value) FILTER (m.metric_name = '{name}') AS {name}" for name in METRIC_NAMES
@@ -148,12 +155,12 @@ def screen(con: duckdb.DuckDBPyConnection, as_of: date) -> pl.DataFrame:
         ORDER BY e.name
         """.replace("PIVOT_COLUMNS", pivot).format(price_cte=price_cte),
             params,
-        ).pl()
+        ).df()
 
 
 def company_history(
     con: duckdb.DuckDBPyConnection, cik: int, as_of: date, concepts: tuple[str, ...]
-) -> pl.DataFrame:
+) -> pd.DataFrame:
     """Annual series for one company, with the filing each figure came from."""
     placeholders = ", ".join(["?"] * len(concepts))
     with cursor(con) as cur:
@@ -168,12 +175,12 @@ def company_history(
         ORDER BY f.period_end, f.canonical
         """,
             [as_of, cik, *concepts],
-        ).pl()
+        ).df()
 
 
 def company_metrics_with_percentile(
     con: duckdb.DuckDBPyConnection, cik: int, as_of: date
-) -> pl.DataFrame:
+) -> pd.DataFrame:
     """Each metric for one company, with its percentile inside its own sector."""
     with cursor(con) as cur:
         return cur.execute(
@@ -194,7 +201,7 @@ def company_metrics_with_percentile(
         FROM ranked WHERE cik = ? ORDER BY metric_name
         """,
             [as_of, cik],
-        ).pl()
+        ).df()
 
 
 def restatement_history(
@@ -204,7 +211,7 @@ def restatement_history(
     period_end: date,
     as_of: date,
     duration_bucket: str = "annual",
-) -> pl.DataFrame:
+) -> pd.DataFrame:
     """Every value ever reported for one (company, concept, period).
 
     This is the one place that reads `fact` directly rather than through the
@@ -235,10 +242,10 @@ def restatement_history(
         ORDER BY f.filed_date, f.accession_number
         """,
             [cik, canonical, period_end, as_of, duration_bucket],
-        ).pl()
+        ).df()
 
 
-def restatement_candidates(con: duckdb.DuckDBPyConnection, cik: int) -> pl.DataFrame:
+def restatement_candidates(con: duckdb.DuckDBPyConnection, cik: int) -> pd.DataFrame:
     """(concept, period) pairs for one company that were reported more than once."""
     with cursor(con) as cur:
         return cur.execute(
@@ -255,7 +262,7 @@ def restatement_candidates(con: duckdb.DuckDBPyConnection, cik: int) -> pl.DataF
         ORDER BY spread DESC
         """,
             [cik],
-        ).pl()
+        ).df()
 
 
 def concept_periods(con: duckdb.DuckDBPyConnection, cik: int, canonical: str) -> list[date]:
