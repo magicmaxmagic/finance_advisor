@@ -1,0 +1,92 @@
+# finlab proof-of-concept universe.
+#
+# A fixed list of large-cap US filers spanning 11 GICS-like sectors, so that
+# peer comparison and sector-neutral ranking are meaningful on a small sample.
+# Hand-maintained: this is deliberately NOT derived from a scraped ticker list.
+#
+# CIKs were resolved once against the SEC's official company_tickers.json and
+# are pinned here. CIK is the durable key -- tickers change, and at least one
+# entry proves it: Exxon Mobil files under 2115436, the holding company created
+# in its 2024 reorganisation, not the 34088 most references still cite.
+#
+# `sector` is our own GICS-like label. The SEC publishes SIC codes, not GICS,
+# and companyfacts carries neither, so this column is the only sector source
+# the PoC has.
+
+version: 1
+companies:
+  # --- Information Technology ---
+  - { cik: 320193, ticker: "AAPL", sector: "Information Technology", name: "Apple Inc." }
+  - { cik: 796343, ticker: "ADBE", sector: "Information Technology", name: "ADOBE INC." }
+  - { cik: 2488, ticker: "AMD", sector: "Information Technology", name: "ADVANCED MICRO DEVICES INC" }
+  - { cik: 1730168, ticker: "AVGO", sector: "Information Technology", name: "Broadcom Inc." }
+  - { cik: 1108524, ticker: "CRM", sector: "Information Technology", name: "Salesforce, Inc." }
+  - { cik: 858877, ticker: "CSCO", sector: "Information Technology", name: "CISCO SYSTEMS, INC." }
+  - { cik: 789019, ticker: "MSFT", sector: "Information Technology", name: "MICROSOFT CORP" }
+  - { cik: 1045810, ticker: "NVDA", sector: "Information Technology", name: "NVIDIA CORP" }
+  - { cik: 1341439, ticker: "ORCL", sector: "Information Technology", name: "ORACLE CORP" }
+
+  # --- Health Care ---
+  - { cik: 1551152, ticker: "ABBV", sector: "Health Care", name: "AbbVie Inc." }
+  - { cik: 200406, ticker: "JNJ", sector: "Health Care", name: "JOHNSON & JOHNSON" }
+  - { cik: 59478, ticker: "LLY", sector: "Health Care", name: "ELI LILLY & Co" }
+  - { cik: 310158, ticker: "MRK", sector: "Health Care", name: "Merck & Co., Inc." }
+  - { cik: 78003, ticker: "PFE", sector: "Health Care", name: "PFIZER INC" }
+  - { cik: 97745, ticker: "TMO", sector: "Health Care", name: "THERMO FISHER SCIENTIFIC INC." }
+  - { cik: 731766, ticker: "UNH", sector: "Health Care", name: "UNITEDHEALTH GROUP INC" }
+
+  # --- Financials ---
+  - { cik: 70858, ticker: "BAC", sector: "Financials", name: "BANK OF AMERICA CORP /DE/" }
+  - { cik: 1067983, ticker: "BRK-B", sector: "Financials", name: "BERKSHIRE HATHAWAY INC" }
+  - { cik: 886982, ticker: "GS", sector: "Financials", name: "GOLDMAN SACHS GROUP INC" }
+  - { cik: 19617, ticker: "JPM", sector: "Financials", name: "JPMORGAN CHASE & CO" }
+  - { cik: 1141391, ticker: "MA", sector: "Financials", name: "Mastercard Inc" }
+  - { cik: 1403161, ticker: "V", sector: "Financials", name: "VISA INC." }
+  - { cik: 72971, ticker: "WFC", sector: "Financials", name: "WELLS FARGO & COMPANY/MN" }
+
+  # --- Consumer Discretionary ---
+  - { cik: 1018724, ticker: "AMZN", sector: "Consumer Discretionary", name: "AMAZON COM INC" }
+  - { cik: 354950, ticker: "HD", sector: "Consumer Discretionary", name: "HOME DEPOT, INC." }
+  - { cik: 63908, ticker: "MCD", sector: "Consumer Discretionary", name: "MCDONALDS CORP" }
+  - { cik: 320187, ticker: "NKE", sector: "Consumer Discretionary", name: "NIKE, Inc." }
+  - { cik: 1318605, ticker: "TSLA", sector: "Consumer Discretionary", name: "Tesla, Inc." }
+
+  # --- Consumer Staples ---
+  - { cik: 909832, ticker: "COST", sector: "Consumer Staples", name: "COSTCO WHOLESALE CORP /NEW" }
+  - { cik: 21344, ticker: "KO", sector: "Consumer Staples", name: "COCA COLA CO" }
+  - { cik: 77476, ticker: "PEP", sector: "Consumer Staples", name: "PEPSICO INC" }
+  - { cik: 80424, ticker: "PG", sector: "Consumer Staples", name: "PROCTER & GAMBLE Co" }
+  - { cik: 104169, ticker: "WMT", sector: "Consumer Staples", name: "Walmart Inc." }
+
+  # --- Energy ---
+  - { cik: 1163165, ticker: "COP", sector: "Energy", name: "CONOCOPHILLIPS" }
+  - { cik: 93410, ticker: "CVX", sector: "Energy", name: "CHEVRON CORP" }
+  - { cik: 2115436, ticker: "XOM", sector: "Energy", name: "ExxonMobil Holdings Corp" }
+
+  # --- Industrials ---
+  - { cik: 12927, ticker: "BA", sector: "Industrials", name: "BOEING CO" }
+  - { cik: 18230, ticker: "CAT", sector: "Industrials", name: "CATERPILLAR INC" }
+  - { cik: 40545, ticker: "GE", sector: "Industrials", name: "GENERAL ELECTRIC CO" }
+  - { cik: 773840, ticker: "HON", sector: "Industrials", name: "HONEYWELL INTERNATIONAL INC" }
+  - { cik: 936468, ticker: "LMT", sector: "Industrials", name: "LOCKHEED MARTIN CORP" }
+  - { cik: 100885, ticker: "UNP", sector: "Industrials", name: "UNION PACIFIC CORP" }
+
+  # --- Communication Services ---
+  - { cik: 1166691, ticker: "CMCSA", sector: "Communication Services", name: "COMCAST CORP" }
+  - { cik: 1744489, ticker: "DIS", sector: "Communication Services", name: "Walt Disney Co" }
+  - { cik: 1652044, ticker: "GOOGL", sector: "Communication Services", name: "Alphabet Inc." }
+  - { cik: 1326801, ticker: "META", sector: "Communication Services", name: "Meta Platforms, Inc." }
+  - { cik: 1065280, ticker: "NFLX", sector: "Communication Services", name: "NETFLIX INC" }
+
+  # --- Utilities ---
+  - { cik: 1326160, ticker: "DUK", sector: "Utilities", name: "Duke Energy CORP" }
+  - { cik: 753308, ticker: "NEE", sector: "Utilities", name: "NEXTERA ENERGY INC" }
+
+  # --- Materials ---
+  - { cik: 831259, ticker: "FCX", sector: "Materials", name: "FREEPORT-MCMORAN INC" }
+  - { cik: 1707925, ticker: "LIN", sector: "Materials", name: "LINDE PLC" }
+  - { cik: 89800, ticker: "SHW", sector: "Materials", name: "SHERWIN WILLIAMS CO" }
+
+  # --- Real Estate ---
+  - { cik: 1053507, ticker: "AMT", sector: "Real Estate", name: "AMERICAN TOWER CORP /MA/" }
+  - { cik: 1045609, ticker: "PLD", sector: "Real Estate", name: "Prologis, Inc." }

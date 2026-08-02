@@ -26,9 +26,23 @@ import duckdb
 
 from finlab.config import Settings, get_settings
 
-# Tables that live as hive-partitioned Parquet rather than inside the DuckDB
-# file, and are therefore exposed to readers as views. See architecture §1.
-WAREHOUSE_DATASETS: tuple[str, ...] = ("fact", "price_daily")
+# Datasets published to the Parquet warehouse and exposed to readers as views.
+#
+# `fact` and `price_daily` live there because they are too large for the DuckDB
+# file (architecture §1). The rest are small tables that live natively in the
+# database and are *also* snapshotted to Parquet, because readers are forbidden
+# from opening the DuckDB file (invariant 2) and would otherwise have no way to
+# resolve a CIK to a name or a concept to its tags.
+WAREHOUSE_DATASETS: tuple[str, ...] = (
+    "fact",
+    "price_daily",
+    "entity",
+    "filing",
+    "concept_map",
+    "security",
+    "metric",
+    "fundamentals_q4",
+)
 
 
 class WriterLockHeld(RuntimeError):
@@ -39,14 +53,14 @@ class DatabaseMissing(FileNotFoundError):
     """The DuckDB file does not exist yet. Run `finlab db init`."""
 
 
-def _sql_literal(value: str) -> str:
+def sql_literal(value: str) -> str:
     """Quote a string for interpolation into DDL that cannot take a bind parameter."""
     escaped = value.replace("'", "''")
     return f"'{escaped}'"
 
 
 def _apply_pragmas(con: duckdb.DuckDBPyConnection, settings: Settings) -> None:
-    con.execute(f"SET memory_limit={_sql_literal(settings.duckdb_memory_limit)}")
+    con.execute(f"SET memory_limit={sql_literal(settings.duckdb_memory_limit)}")
     con.execute(f"SET threads={settings.duckdb_threads:d}")
 
 
@@ -117,13 +131,32 @@ def attach_warehouse_views(
         root = cfg.warehouse_dir / dataset
         if not root.is_dir() or not any(root.rglob("*.parquet")):
             continue
-        glob = _sql_literal(f"{root}/**/*.parquet")
+        # Hive columns are reconstructed from `key=value` directories; a flat
+        # snapshot has none, and asking for them there is a needless mismatch.
+        hive = any(child.is_dir() and "=" in child.name for child in root.iterdir())
+        glob = sql_literal(f"{root}/**/*.parquet")
         con.execute(
             f"CREATE OR REPLACE VIEW {dataset} AS "
-            f"SELECT * FROM read_parquet({glob}, hive_partitioning = true)"
+            f"SELECT * FROM read_parquet({glob}, hive_partitioning = {str(hive).lower()})"
         )
         attached.append(dataset)
     return attached
+
+
+def new_read_conn(
+    settings: Settings | None = None, *, attach_warehouse: bool = True
+) -> duckdb.DuckDBPyConnection:
+    """An open in-memory database over the Parquet warehouse. Caller closes it.
+
+    Long-lived readers — the Streamlit app holds one across reruns — need a
+    connection they own rather than a context manager.
+    """
+    cfg = settings or get_settings()
+    con = duckdb.connect(":memory:")
+    _apply_pragmas(con, cfg)
+    if attach_warehouse:
+        attach_warehouse_views(con, cfg)
+    return con
 
 
 @contextmanager
@@ -135,12 +168,8 @@ def read_conn(
     This is what every reader should use. It never touches the DuckDB file, so
     it cannot contend with the writer.
     """
-    cfg = settings or get_settings()
-    con = duckdb.connect(":memory:")
+    con = new_read_conn(settings, attach_warehouse=attach_warehouse)
     try:
-        _apply_pragmas(con, cfg)
-        if attach_warehouse:
-            attach_warehouse_views(con, cfg)
         yield con
     finally:
         con.close()

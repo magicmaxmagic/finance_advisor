@@ -1,0 +1,139 @@
+# finlab canonical concept map.
+#
+# The tag normalisation layer (architecture §3.5), and the single most
+# underestimated piece of the system. "Revenue" is not one tag: it is at least
+# seven, varying by company AND by year, because ASC 606 replaced the older
+# SalesRevenue* family in 2018 and financial issuers never used either.
+#
+# Resolution rule: for each (cik, canonical, period), take the LOWEST priority
+# number that is actually present. Priority 1 is the most preferred.
+#
+# `sign` is -1 where a tag is reported with the opposite sign to our convention.
+# Note capex stays +1: PaymentsToAcquire* are reported as positive outflows, and
+# free cash flow is therefore cfo - capex.
+#
+# `kind` marks a concept as a flow (income statement, cash flow: has a period)
+# or an instant (balance sheet: a point in time). The coverage check uses it so
+# that a balance-sheet concept is not counted as missing on a period for which
+# the filer reported only flows.
+#
+# This file is hand-edited. Tag choices below were seeded from the actual usage
+# of the proof-of-concept universe rather than guessed; run
+# `finlab concepts coverage` after any change.
+
+version: 2
+taxonomy: us-gaap
+
+concepts:
+  # --- income statement ----------------------------------------------------
+  revenue:
+    description: Net revenue from continuing operations.
+    kind: flow
+    tags:
+      # `Revenues` outranks the ASC 606 tag deliberately. Where both appear in
+      # the same filing, `Revenues` is the consolidated total, while
+      # RevenueFromContractWithCustomer* can be just the contract-revenue
+      # component: American Tower tags 936M against it for FY2025 versus a
+      # 10.6B total. Filers that stopped tagging `Revenues` (Apple after 2018,
+      # Microsoft after 2010) are unaffected, because resolution happens per
+      # period and simply falls through to the next available tag.
+      - { tag: Revenues, priority: 1 }
+      - { tag: RevenueFromContractWithCustomerExcludingAssessedTax, priority: 2 }
+      - { tag: RevenueFromContractWithCustomerIncludingAssessedTax, priority: 3 }
+      # Banks and brokers report revenue net of interest expense; without this
+      # the whole Financials sector resolves to nothing.
+      - { tag: RevenuesNetOfInterestExpense, priority: 4 }
+      - { tag: SalesRevenueNet, priority: 5 }
+      - { tag: SalesRevenueGoodsNet, priority: 6 }
+      - { tag: SalesRevenueServicesNet, priority: 7 }
+      - { tag: RevenueFromContractWithCustomerExcludingAssessedTaxProductAndService, priority: 8 }
+
+  cogs:
+    description: Cost of goods and services sold.
+    kind: flow
+    tags:
+      - { tag: CostOfGoodsAndServicesSold, priority: 1 }
+      - { tag: CostOfRevenue, priority: 2 }
+      - { tag: CostOfGoodsSold, priority: 3 }
+      - { tag: CostOfServices, priority: 4 }
+      - { tag: CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization, priority: 5 }
+
+  gross_profit:
+    description: Revenue less cost of goods sold.
+    kind: flow
+    tags:
+      - { tag: GrossProfit, priority: 1 }
+
+  operating_income:
+    description: Operating income or loss.
+    kind: flow
+    tags:
+      - { tag: OperatingIncomeLoss, priority: 1 }
+      - { tag: IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest, priority: 2 }
+      - { tag: IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments, priority: 3 }
+
+  net_income:
+    description: Net income attributable to the parent.
+    kind: flow
+    tags:
+      - { tag: NetIncomeLoss, priority: 1 }
+      - { tag: ProfitLoss, priority: 2 }
+      - { tag: NetIncomeLossAvailableToCommonStockholdersBasic, priority: 3 }
+
+  # --- balance sheet (instants) --------------------------------------------
+  total_assets:
+    description: Total assets.
+    kind: instant
+    tags:
+      - { tag: Assets, priority: 1 }
+
+  total_liabilities:
+    description: Total liabilities.
+    kind: instant
+    tags:
+      - { tag: Liabilities, priority: 1 }
+
+  equity:
+    description: Total shareholders' equity.
+    kind: instant
+    tags:
+      - { tag: StockholdersEquity, priority: 1 }
+      - { tag: StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest, priority: 2 }
+
+  cash:
+    description: Cash and cash equivalents.
+    kind: instant
+    tags:
+      - { tag: CashAndCashEquivalentsAtCarryingValue, priority: 1 }
+      - { tag: CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents, priority: 2 }
+      - { tag: CashAndDueFromBanks, priority: 3 }
+      - { tag: CashCashEquivalentsAndShortTermInvestments, priority: 4 }
+
+  total_debt:
+    description: Interest-bearing debt, short and long term.
+    kind: instant
+    tags:
+      - { tag: DebtLongtermAndShorttermCombinedAmount, priority: 1 }
+      - { tag: LongTermDebt, priority: 2 }
+      - { tag: LongTermDebtNoncurrent, priority: 3 }
+      - { tag: DebtInstrumentCarryingAmount, priority: 4 }
+
+  # --- cash flow -----------------------------------------------------------
+  cfo:
+    description: Net cash provided by operating activities.
+    kind: flow
+    tags:
+      - { tag: NetCashProvidedByUsedInOperatingActivities, priority: 1 }
+      - { tag: NetCashProvidedByUsedInOperatingActivitiesContinuingOperations, priority: 2 }
+
+  capex:
+    description: Purchases of property, plant and equipment. Positive = outflow.
+    kind: flow
+    tags:
+      - { tag: PaymentsToAcquirePropertyPlantAndEquipment, priority: 1 }
+      - { tag: PaymentsToAcquireProductiveAssets, priority: 2 }
+      - { tag: PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets, priority: 3 }
+      - { tag: PaymentsForCapitalImprovements, priority: 4 }
+      - { tag: PaymentsToAcquireOtherPropertyPlantAndEquipment, priority: 5 }
+      # Integrated energy majors report additions to productive assets instead.
+      - { tag: PaymentsForProceedsFromProductiveAssets, priority: 6 }
