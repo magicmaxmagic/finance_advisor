@@ -17,6 +17,7 @@ import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
@@ -80,6 +81,46 @@ def atomic_replace_dir(src: Path, dst: Path) -> None:
         trash.replace(dst)
         raise
     shutil.rmtree(trash, ignore_errors=True)
+
+
+def write_daily_snapshot(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    source: str,
+    root: Path,
+    snapshot_date: date,
+    order_by: Sequence[str] = (),
+    compression: str = "zstd",
+    overwrite: bool = False,
+) -> tuple[Path, int]:
+    """Append one immutable day to a snapshot dataset.
+
+    Unlike `write_partitioned`, this never rewrites anything. A universe
+    snapshot is a record of what was listed on a given date; re-deriving it
+    later from today's listings would destroy the only property that makes it
+    worth keeping. Each day is its own file under `year=YYYY/`, so a run is
+    idempotent — an existing day is left alone unless `overwrite` is set.
+
+    Returns the file path and the row count, with count -1 when the day already
+    existed and was skipped.
+    """
+    root = Path(root)
+    target_dir = root / f"year={snapshot_date.year}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"snapshot-{snapshot_date.isoformat()}.parquet"
+
+    if target.exists() and not overwrite:
+        return target, -1
+
+    order = f" ORDER BY {', '.join(order_by)}" if order_by else ""
+    tmp = target.with_suffix(".parquet.tmp")
+    con.execute(
+        f"COPY (SELECT * FROM {source}{order}) TO {sql_literal(str(tmp))} "
+        f"(FORMAT PARQUET, COMPRESSION {compression})"
+    )
+    rows = int(con.execute(f"SELECT count(*) FROM {source}").fetchone()[0])
+    tmp.replace(target)
+    return target, rows
 
 
 def publish_table(

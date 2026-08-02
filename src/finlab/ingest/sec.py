@@ -28,6 +28,7 @@ from tenacity import (
 from finlab.config import Settings, get_settings
 
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 
 class SecEtiquetteError(RuntimeError):
@@ -131,6 +132,34 @@ class SecClient:
 
 def companyfacts_url(cik: int) -> str:
     return COMPANYFACTS_URL.format(cik=cik)
+
+
+def submissions_url(cik: int) -> str:
+    return SUBMISSIONS_URL.format(cik=cik)
+
+
+def get_once(url: str, settings: Settings | None = None, *, timeout: float = 60.0) -> bytes:
+    """One synchronous fetch carrying the configured contact address.
+
+    For the handful of once-a-day files — the symbol directory, the ticker
+    mapping — where spinning up the async client and its rate limiter would be
+    ceremony around a single request. The User-Agent check still applies,
+    because that is the part the SEC actually enforces.
+    """
+    cfg = settings or get_settings()
+    if cfg.sec_user_agent_is_placeholder:
+        raise SecEtiquetteError(
+            "FINLAB_SEC_USER_AGENT is still the placeholder from .env.example. "
+            "Set a real contact address before making requests."
+        )
+    response = httpx.get(
+        url,
+        headers={"User-Agent": cfg.sec_user_agent, "Accept-Encoding": "gzip, deflate"},
+        timeout=timeout,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    return response.content
 
 
 def describe_limits(settings: Settings | None = None) -> dict[str, Any]:

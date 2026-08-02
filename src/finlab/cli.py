@@ -307,6 +307,70 @@ def ingest_prices_command(
         err_console.print(f"[yellow]no price series for:[/] {', '.join(report.tickers_missing)}")
 
 
+@ingest_app.command("universe")
+def ingest_universe_command(
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Rewrite a snapshot already captured.")
+    ] = False,
+) -> None:
+    """Capture today's symbol directory as an immutable universe snapshot.
+
+    Run this daily. A point-in-time universe cannot be reconstructed after the
+    fact, so a day missed is a day lost permanently.
+    """
+    from finlab.ingest.sec import SecEtiquetteError
+    from finlab.ingest.universe import SymbolDirectoryError, capture_snapshot, rebuild_securities
+
+    cfg = get_settings()
+    cfg.ensure_dirs()
+
+    try:
+        with write_conn(cfg) as con:
+            report = capture_snapshot(con, cfg, overwrite=overwrite)
+            securities = rebuild_securities(con, cfg)
+    except (WriterLockHeld, SecEtiquetteError, SymbolDirectoryError) as exc:
+        raise _fail(str(exc)) from exc
+
+    if report.skipped:
+        console.print(
+            f"[yellow]{report.snapshot_date} already captured[/] — left untouched "
+            f"(pass --overwrite to replace it)"
+        )
+    else:
+        console.print(f"captured [bold]{report.snapshot_date}[/] → {report.path}")
+    console.print(
+        f"{report.rows:,} securities · {report.nasdaq:,} NASDAQ · {report.other:,} other · "
+        f"{report.common:,} common · {report.cik_mapped:,} mapped to a CIK"
+    )
+    console.print(f"security {securities:,} rows rebuilt from all snapshots")
+
+
+@ingest_app.command("submissions")
+def ingest_submissions_command(
+    force: Annotated[bool, typer.Option("--force", help="Re-download even if cached.")] = False,
+) -> None:
+    """Backfill filing acceptance times and entity descriptors from EDGAR."""
+    from finlab.ingest.sec import SecEtiquetteError
+    from finlab.ingest.submissions import ingest_submissions
+
+    cfg = get_settings()
+    cfg.ensure_dirs()
+
+    try:
+        with write_conn(cfg) as con:
+            report = ingest_submissions(con, cfg, force=force)
+    except (WriterLockHeld, SecEtiquetteError) as exc:
+        raise _fail(str(exc)) from exc
+
+    console.print(
+        f"{report.companies} companies · {report.filings_seen:,} submissions seen · "
+        f"{report.filings_updated:,} filings now carry accepted_at"
+    )
+    console.print(f"{report.entities_updated} entities have a SIC code")
+    if report.missing:
+        err_console.print(f"[yellow]no submissions for CIKs:[/] {sorted(report.missing)}")
+
+
 @app.command("metrics")
 def metrics_build(
     as_of: Annotated[

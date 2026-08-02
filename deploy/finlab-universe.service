@@ -1,0 +1,24 @@
+[Unit]
+Description=finlab daily universe snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/finance_advisor
+ExecStart=/usr/bin/env uv run finlab ingest universe
+
+# The capture is idempotent and the data is irreplaceable, so retry rather than
+# lose the day. A missed weekday snapshot can never be reconstructed.
+Restart=on-failure
+RestartSec=15min
+
+# It writes only under the data tree.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/Documents/finance_advisor/data
+
+[Install]
+WantedBy=default.target

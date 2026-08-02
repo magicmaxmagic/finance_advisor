@@ -42,6 +42,7 @@ WAREHOUSE_DATASETS: tuple[str, ...] = (
     "security",
     "metric",
     "fundamentals_q4",
+    "universe_snapshot",
 )
 
 

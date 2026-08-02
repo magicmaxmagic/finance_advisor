@@ -1,0 +1,16 @@
+[Unit]
+Description=Capture the finlab universe snapshot every weekday evening
+
+[Timer]
+# 18:30 local, after the exchanges have cut the day's symbol directory. The
+# files carry their own creation time, so a run landing on the wrong side of
+# midnight still records the correct date rather than inventing one.
+OnCalendar=Mon..Fri 18:30
+# Catch up after the machine was asleep. Nasdaq Trader only serves the current
+# file, so this recovers the LATEST missed day, not every one of them — a
+# machine off for a week still loses that week.
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

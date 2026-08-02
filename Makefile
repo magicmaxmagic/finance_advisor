@@ -15,7 +15,7 @@ DATA_DIR ?= data
 WAREHOUSE := $(DATA_DIR)/warehouse/fact
 
 .PHONY: help setup env ingest concepts metrics run ui test lint fmt check \
-        coverage status clean clean-data bootstrap
+        coverage status clean clean-data bootstrap universe submissions schedule
 
 help: ## Show the available targets
 	@echo "finlab — make targets"
@@ -44,13 +44,28 @@ env: ## Create .env from the example if it is missing
 ingest: ## Fetch companyfacts for the PoC universe (~50 SEC requests)
 	uv run finlab ingest poc
 
+universe: ## Capture today's universe snapshot — run this DAILY, it cannot be backfilled
+	uv run finlab ingest universe
+
+submissions: ## Backfill filing acceptance times and entity descriptors
+	uv run finlab ingest submissions
+
+schedule: ## Install the systemd timer for the daily universe snapshot
+	mkdir -p $(HOME)/.config/systemd/user
+	cp deploy/finlab-universe.service deploy/finlab-universe.timer $(HOME)/.config/systemd/user/
+	systemctl --user daemon-reload
+	systemctl --user enable --now finlab-universe.timer
+	@systemctl --user list-timers finlab-universe.timer --no-pager
+	@echo
+	@echo "run 'loginctl enable-linger $(USER)' so it fires when you are logged out"
+
 concepts: ## Load the concept map and rebuild derived Q4
 	uv run finlab concepts load
 
 metrics: ## Compute the ratio set at AS_OF
 	uv run finlab metrics --as-of $(AS_OF)
 
-bootstrap: setup env ingest concepts metrics ## Fresh clone to a running app, in one go
+bootstrap: setup env ingest submissions concepts metrics universe ## Fresh clone to a running app, in one go
 	@echo
 	@echo "ready — now run: make run"
 

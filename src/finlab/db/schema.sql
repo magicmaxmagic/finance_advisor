@@ -47,9 +47,13 @@ CREATE TABLE IF NOT EXISTS entity (
 -- Tradable line. Separate from entity because one filer can have several share
 -- classes (GOOG/GOOGL), and because delisting is a security event, not an
 -- entity event.
+-- `cik` is a CIK but carries no foreign key: the universe snapshot records
+-- every listed security on the exchange, while `entity` only holds filers whose
+-- facts have been ingested. The two cover different populations, so the
+-- constraint would block universe capture (migration 0002).
 CREATE TABLE IF NOT EXISTS security (
   security_id      VARCHAR PRIMARY KEY,  -- synthetic, e.g. 'US:0000320193:AAPL'
-  cik              INTEGER REFERENCES entity(cik),
+  cik              INTEGER,
   ticker           VARCHAR NOT NULL,
   exchange         VARCHAR,
   share_class      VARCHAR,
