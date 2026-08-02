@@ -1,0 +1,28 @@
+[Unit]
+Description=finlab daemon — the single DuckDB writer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/finance_advisor
+ExecStart=/usr/bin/env uv run finlabd
+Environment=FINLAB_LOG_FORMAT=json
+
+# The daemon holds the only write connection. Restarting is always safe: jobs
+# stranded in `running` by a hard kill are reclaimed on the next start.
+Restart=always
+RestartSec=10
+
+# SIGTERM lets the running job finish and releases the write lock.
+KillSignal=SIGTERM
+TimeoutStopSec=300
+
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/Documents/finance_advisor/data
+
+[Install]
+WantedBy=default.target

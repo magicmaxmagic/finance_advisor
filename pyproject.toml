@@ -46,6 +46,7 @@ ui = ["streamlit>=1.36"]
 
 [project.scripts]
 finlab = "finlab.cli:app"
+finlabd = "finlab.daemon.main:main"
 
 [dependency-groups]
 dev = [

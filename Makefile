@@ -15,7 +15,8 @@ DATA_DIR ?= data
 WAREHOUSE := $(DATA_DIR)/warehouse/fact
 
 .PHONY: help setup env ingest concepts metrics run ui test lint fmt check \
-        coverage status clean clean-data bootstrap universe submissions schedule
+        coverage status clean clean-data bootstrap universe submissions schedule \
+        daemon queue schedule-daemon
 
 help: ## Show the available targets
 	@echo "finlab — make targets"
@@ -68,6 +69,23 @@ metrics: ## Compute the ratio set at AS_OF
 bootstrap: setup env ingest submissions concepts metrics universe ## Fresh clone to a running app, in one go
 	@echo
 	@echo "ready — now run: make run"
+
+# --- the daemon -------------------------------------------------------------
+
+daemon: ## Run finlabd in the foreground (holds the single write connection)
+	uv run finlabd
+
+queue: ## Show the job queue by state
+	@uv run python -c "from finlab.config import get_settings; from finlab.db.conn import write_conn; \
+from finlab.daemon import queue; \
+print(queue.counts(write_conn(get_settings()).__enter__()))"
+
+schedule-daemon: ## Install and start finlabd as a systemd user service
+	mkdir -p $(HOME)/.config/systemd/user
+	cp deploy/finlabd.service $(HOME)/.config/systemd/user/
+	systemctl --user daemon-reload
+	systemctl --user enable --now finlabd.service
+	@systemctl --user status finlabd.service --no-pager | head -5
 
 # --- the app ----------------------------------------------------------------
 
