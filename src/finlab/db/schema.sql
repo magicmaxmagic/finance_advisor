@@ -2,9 +2,14 @@
 --
 -- This file is the BASELINE: `finlab db init` applies it to an empty database
 -- and stamps schema_version to the highest migration number present in
--- db/migrations/. Existing databases are moved forward by the numbered deltas
--- in db/migrations/ instead. When you change the schema, add a migration AND
--- update this file so the two stay equivalent.
+-- db/migrations/, because this file already contains every migration's effect.
+-- Existing databases are moved forward by the numbered deltas instead.
+--
+-- Changing the schema means doing BOTH halves: add migrations/NNNN_name.sql
+-- AND update this file. They are not allowed to drift —
+-- tests/test_schema_drift.py builds one database from this file and another by
+-- replaying every migration from empty, then asserts their columns and
+-- constraints match exactly. That test is what makes baseline-plus-deltas safe.
 --
 -- Column names and types follow docs/architecture.md. Deviations are limited to
 -- physical constraints and are each justified in a comment below.
@@ -93,7 +98,7 @@ CREATE INDEX IF NOT EXISTS filing_cik_filed ON filing(cik, filed_date);
 -- period reported in three successive filings produces three rows. That
 -- redundancy is the restatement history and must be preserved.
 --
--- Logical key: (cik, taxonomy, tag, unit, period_end, period_start,
+-- Logical key: (cik, taxonomy, tag, unit, period_start, period_end,
 -- accession_number). It is NOT declared as a physical PRIMARY KEY, for two
 -- reasons:
 --   1. period_start is NULL for instant (balance-sheet) facts, and DuckDB
@@ -103,8 +108,10 @@ CREATE INDEX IF NOT EXISTS filing_cik_filed ON filing(cik, filed_date);
 --      memory limit.
 -- This table is warehouse-backed (hive-partitioned Parquet under
 -- data/warehouse/fact/taxonomy=*/filed_year=*/), where no constraint is
--- enforceable anyway. Deduplication on the logical key is the ingester's job.
+-- enforceable anyway. `fact_key` carries that logical key as a 64-bit hash so
+-- deduplication is a GROUP BY; see db/keys.py for why it is MD5-derived.
 CREATE TABLE IF NOT EXISTS fact (
+  fact_key         BIGINT  NOT NULL,   -- hash64 of the logical key, see db/keys.py
   cik              INTEGER NOT NULL,
   taxonomy         VARCHAR NOT NULL,   -- 'us-gaap','ifrs-full','dei','srt'
   tag              VARCHAR NOT NULL,   -- 'Revenues','Assets'
@@ -126,8 +133,10 @@ CREATE TABLE IF NOT EXISTS fact (
 -- retroactively restated, so the adjusted series is derived from
 -- corporate_action as-of a date instead.
 -- Logical key (security_id, date) is not declared physically for the same
--- index-memory reason as fact; this table is warehouse-backed too.
+-- index-memory reason as fact; this table is warehouse-backed too, and carries
+-- the same style of hashed surrogate key.
 CREATE TABLE IF NOT EXISTS price_daily (
+  price_key   BIGINT  NOT NULL,   -- hash64 of (security_id, date), see db/keys.py
   security_id VARCHAR NOT NULL,
   date        DATE    NOT NULL,
   open        DOUBLE,

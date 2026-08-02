@@ -170,6 +170,23 @@ def migrate(con: duckdb.DuckDBPyConnection) -> list[Migration]:
     return applied
 
 
+def replay_all(con: duckdb.DuckDBPyConnection) -> list[Migration]:
+    """Apply every migration in order to an empty database.
+
+    This is the path `schema.sql` must be equivalent to. Nothing in production
+    uses it — a fresh install takes the baseline instead — but
+    tests/test_schema_drift.py replays it to prove the two agree. It works from
+    empty because migration 0001 creates `schema_version` itself.
+    """
+    applied: list[Migration] = []
+    for migration in discover_migrations():
+        _apply_and_stamp(
+            con, migration.sql(), migration.version, migration.name, migration.path.name
+        )
+        applied.append(migration)
+    return applied
+
+
 def init_database(con: duckdb.DuckDBPyConnection) -> InitResult:
     """Bring a database up to the current schema, fresh or existing. Idempotent."""
     if not _schema_version_exists(con):

@@ -1,10 +1,11 @@
 # data tree — never committed
 /data/
-docs
 
 # environment
 .env
-.claude
+# Shared Claude Code settings and project commands are tracked; only the
+# per-developer overrides are not.
+.claude/settings.local.json
 .venv/
 venv/
 

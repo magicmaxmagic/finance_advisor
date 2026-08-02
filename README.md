@@ -10,11 +10,15 @@ Working agreements for contributors (human or agent): [`CLAUDE.md`](CLAUDE.md).
 ## Setup
 
 ```bash
-uv sync
+uv sync --all-extras    # the dev/CI setup; plain `uv sync` omits the LLM, research and UI extras
 cp .env.example .env    # then set FINLAB_SEC_USER_AGENT to a real contact address
 uv run finlab db init
 uv run finlab db status
 ```
+
+Dependencies are grouped so the base install stays small: `text` (pydantic-ai),
+`eval` (mlflow), `research` (statsmodels, quantstats) and `ui` (streamlit).
+Development and CI always take all of them.
 
 ## Layout
 

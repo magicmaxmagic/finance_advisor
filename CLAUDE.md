@@ -50,6 +50,16 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 - typer for CLI
 - ruff, pytest, pre-commit
 
+## Environment setup
+
+**`uv sync --all-extras` is the development and CI setup.** Use it. A bare
+`uv sync` installs only the core dependencies and will leave M5 (`pydantic-ai`,
+`mlflow`), M7 (`statsmodels`, `quantstats`) and the UI (`streamlit`) missing.
+
+The extras exist so the base install stays small, not so parts of the stack are
+optional: `text`, `eval`, `research`, `ui`. Everything in the stack list above
+is declared somewhere; nothing was dropped.
+
 ## Explicitly rejected — do not introduce
 
 - Airflow, Dagster, Prefect, Celery, Redis (APScheduler in-process is sufficient)
