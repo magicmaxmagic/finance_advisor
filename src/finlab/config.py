@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # --- market data (IEX, read-only requests) ------------------------------
     alpaca_key_id: SecretStr | None = None
     alpaca_secret_key: SecretStr | None = None
+    market_mode: Literal["demo", "live"] = "demo"
 
     # --- Ollama Cloud --------------------------------------------------------
     ollama_base_url: str = "https://ollama.com"

@@ -26,6 +26,17 @@ if TYPE_CHECKING:
 
 
 def _annual_facts(settings: Settings, companies: tuple, week: date) -> tuple[dict, dict]:
+    from finlab.ingest.companyfacts import fetch_poc_universe
+
+    # A failed refresh never silently reuses old files.
+    fetched = asyncio.run(fetch_poc_universe(companies, settings, force=True))
+    return resolve_annual_facts(settings, companies, week, set(fetched.downloaded))
+
+
+def resolve_annual_facts(
+    settings: Settings, companies: tuple, week: date, available_ciks: set[int]
+) -> tuple[dict, dict]:
+    """Resolve downloaded annual observations through the shared PIT macro."""
     import polars as pl
 
     from finlab.core.concepts import load_concept_map_file
@@ -33,15 +44,11 @@ def _annual_facts(settings: Settings, companies: tuple, week: date) -> tuple[dic
     from finlab.db.conn import read_conn
     from finlab.ingest.companyfacts import (
         FACT_COLUMNS,
-        fetch_poc_universe,
         load_manifest,
         parse_companyfacts,
         read_raw,
     )
 
-    # Refresh through finlab's rate-limited SEC client. A 404 excludes that issuer
-    # even when an earlier download remains on disk.
-    fetched = asyncio.run(fetch_poc_universe(companies, settings, force=True))
     manifest = load_manifest(settings)
     mappings = [m for m in load_concept_map_file() if m.canonical == "revenue"]
     eps_tag = "EarningsPerShareDiluted"
@@ -49,7 +56,7 @@ def _annual_facts(settings: Settings, companies: tuple, week: date) -> tuple[dic
     records = []
     hashes = {}
     for company in companies:
-        if company.cik not in fetched.downloaded:
+        if company.cik not in available_ciks:
             continue
         doc = read_raw(settings, company.cik)
         if int(doc["cik"]) != company.cik:

@@ -446,6 +446,17 @@ def weekly(
     console.print(f"Full evidence, exclusions and sources: {path}")
 
 
+@app.command("api")
+def api(
+    port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8000,
+    host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
+) -> None:
+    """Launch the read-only FastAPI backend."""
+    import uvicorn
+
+    uvicorn.run("finlab.api.app:app", host=host, port=port, reload=False)
+
+
 @app.command("ui")
 def ui(
     port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8501,

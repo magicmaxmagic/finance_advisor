@@ -31,7 +31,7 @@ make run
 The screen covers the 54 US filers in the project's fixed universe. After the US trading week ends, it compares each company with SPY and identifies candidates for a 3–12 month research horizon. A week can have zero candidates. Each company shows its outcome, inputs, filing links and dated price history.
 
 | A company must pass all four rules | Calculation |
-|---|---|
+| --- | --- |
 | Annual earnings yield ≥ 4% | Latest reported fiscal-year diluted EPS in USD divided by the raw USD closing price |
 | Annual sales growth > 0 | Latest annual revenue divided by comparable prior-year revenue, minus one |
 | Positive relative momentum | Stock adjusted return from 52 to 4 weeks ago minus SPY’s return on the same dates |
@@ -50,30 +50,31 @@ Qualifying names are ranked by earnings yield, then relative momentum. The maxim
 ## Quick start
 
 ```bash
-make bootstrap   # deps, .env, database, SEC ingest, concept map, metrics
-make run         # read-only UI on http://127.0.0.1:8501
+make setup
+make env
+# In .env, set FINLAB_SEC_USER_AGENT to a real contact address.
+make app       # FastAPI on 8000 + React/Vite on 5173
 ```
+
+For the Streamlit interface, use `make run` (`8501` by default). The React application is the primary web frontend and calls the read-only FastAPI backend; FastAPI exposes Swagger/OpenAPI at `http://127.0.0.1:8000/docs`.
 
 `make` on its own lists every target.
 
 | Target | Does |
-|---|---|
-| `run` | Launch the read-only UI |
-| `bootstrap` | Fresh clone → ready to run |
+| --- | --- |
+| `app` | Launch FastAPI and React/Vite together |
+| `api` | Launch the read-only FastAPI backend on `127.0.0.1:8000` |
+| `web` | Launch React/Vite on `127.0.0.1:5173` |
+| `run` / `ui` | Launch the legacy Streamlit UI on `127.0.0.1:8501` |
+| `bootstrap` | Fresh clone → setup, ingest, concepts, metrics, and universe snapshot |
 | `check` | Lint + tests — the pre-push gate |
-| `test` `lint` `fmt` | Individually |
+| `test` `lint` `fmt` | Run checks individually |
 | `coverage` | Concept resolution report; exits non-zero below 95% |
-| `status` | Schema version, table names, row counts |
+| `status` | Schema version, table names and row counts |
 | `ingest` `concepts` `metrics` | Pipeline stages on their own |
 | `clean` `clean-data` | Caches; warehouse and DB, keeping raw downloads |
 
 Override defaults inline: `make run PORT=9000`, `make metrics AS_OF=2024-01-01`.
-
-`make run` opens the read-only dashboard. A fresh checkout opens Weekly brief and shows how to generate the first edition. The other pages use the bootstrapped warehouse.
-
-> **Before ingesting:** set `FINLAB_SEC_USER_AGENT` in `.env` to a real contact
-> address. The SEC blocks anonymous traffic, and `SecClient` refuses to start
-> while the placeholder is in place.
 
 ---
 
@@ -82,7 +83,7 @@ Override defaults inline: `make run PORT=9000`, `make metrics AS_OF=2024-01-01`.
 A proof-of-concept vertical slice: real code paths, deliberately narrow universe.
 
 | | |
-|---|---|
+| --- | --- |
 | Universe | 54 large-cap filers, 11 GICS-like sectors, pinned by CIK |
 | Facts | 1,511,785 observations, filed 2009-05-07 → 2026-07-31 |
 | Filings | 9,226 |
@@ -91,7 +92,7 @@ A proof-of-concept vertical slice: real code paths, deliberately narrow universe
 | Disk | 21 MB warehouse · 15 MB raw · 7.6 MB database |
 | Tests | 120, zero skipped |
 
-Stack: Python 3.12, DuckDB 1.5, Parquet, Polars, Streamlit, `uv`.
+Stack: Python 3.12, DuckDB 1.5, Parquet, Polars, FastAPI, Streamlit, React 19, TypeScript, Vite, `uv`, `npm`.
 
 ---
 
@@ -111,14 +112,17 @@ flowchart LR
     CM --> PIT
     PIT --> Q4["derived Q4<br/>per filing vintage"]
     PIT --> MET["8 ratios"]
-    PIT --> UI["Streamlit UI"]
-    MET --> UI
-    PUB --> UI
-    Q4 --> UI
+    MET --> API["FastAPI read-only API"]
+    API --> WEB["React + Vite frontend"]
+    PIT --> STREAMLIT["Streamlit UI"]
+    MET --> STREAMLIT
+    PUB --> API
+    Q4 --> STREAMLIT
 
     style PIT fill:#2d6a4f,color:#fff
     style FACT fill:#1d3557,color:#fff
-    style UI fill:#6a4c93,color:#fff
+    style API fill:#457b9d,color:#fff
+    style WEB fill:#6a4c93,color:#fff
 ```
 
 The split between `parse_companyfacts` and the fetch layer is load-bearing: M1's
@@ -169,7 +173,9 @@ flowchart TD
         D["finlabd / CLI"] -->|"flock"| DB[("finlab.duckdb")]
     end
     subgraph R["read side — any number"]
-        UI["Streamlit"] --> MEM["in-memory DuckDB"]
+        WEB["React + Vite"] --> API["FastAPI"]
+        STREAMLIT["Streamlit"] --> MEM["in-memory DuckDB"]
+        API --> MEM
         NB["notebooks"] --> MEM
         CLI["CLI read commands"] --> MEM
         MEM --> PQ[("Parquet warehouse")]
@@ -218,19 +224,20 @@ report was computed, never generated.
 
 ## Repository layout
 
-```
+```text
 src/finlab/
   config.py        settings — pydantic-settings over .env
-  cli.py           typer entrypoint: db · ingest · concepts · metrics · ui
+  cli.py           typer entrypoint: db · ingest · concepts · metrics · ui · api
   data/            poc_universe.yaml · concept_map.yaml   (hand-maintained)
   db/              conn · schema.sql · migrations · keys
   ingest/          sec · companyfacts · warehouse · universe · prices
   core/            concepts · pit · metrics · valuation      (valuation: M6)
-  ui/              app.py · queries.py                       read-only
+  api/             app.py                              read-only FastAPI backend
   text/            fetch · sections · schemas · extract      (M5)
   report/          bundle · compose · critic                 (M6)
   research/        signals · backtest · stats                (M7)
   daemon/          main · scheduler · queue · pools          (M4)
+  ui/              app.py · queries.py                       (legacy)
 ```
 
 ### Schema and migrations

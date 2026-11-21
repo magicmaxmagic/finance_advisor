@@ -15,8 +15,9 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 
 2. **Single DuckDB writer.** Exactly one process (`finlabd`) holds the
    read-write connection to `data/db/finlab.duckdb`. Every other consumer —
-   Streamlit, notebooks, CLI read commands — opens an in-memory DuckDB and
-   reads the Parquet warehouse. Never open a second read-write connection.
+   Streamlit, FastAPI, React/Vite, notebooks, and CLI read commands — opens an
+   in-memory DuckDB or reads the Parquet warehouse. Never open a second
+   read-write connection.
 
 3. **No LLM in the deterministic path.** Ratios, valuations, screens, signals,
    and backtests are SQL and NumPy. LLMs touch only unstructured filing text.
@@ -46,7 +47,9 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 - structlog → JSON
 - numpy, scipy, statsmodels, quantstats
 - MLflow OSS (file backend) for extraction evals
-- Streamlit for read-only UI
+- FastAPI for the read-only HTTP API
+- Streamlit for the legacy read-only UI
+- React 19 + TypeScript + Vite for the web frontend
 - typer for CLI
 - ruff, pytest, pre-commit
 
@@ -85,7 +88,7 @@ written wrong.
 ## Model routing
 
 | Job | Model |
-|---|---|
+| --- | --- |
 | section classification, boilerplate detection | `gpt-oss:20b` |
 | structured field extraction | `gpt-oss:120b` |
 | report narrative synthesis | `gpt-oss:120b` |

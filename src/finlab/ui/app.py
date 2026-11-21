@@ -29,7 +29,7 @@ from finlab.ui import queries as q
 
 st.set_page_config(page_title="finlab", page_icon="📊", layout="wide")
 
-PAGES = ("Screen", "Company", "Restatement explorer", "Weekly brief")
+PAGES = ("Marché en direct", "Weekly brief", "Screen", "Company", "Restatement explorer")
 
 HISTORY_CONCEPTS = ("revenue", "gross_profit", "operating_income", "net_income")
 
@@ -129,7 +129,12 @@ def _fmt_money(value: float | None) -> str:
 
 st.sidebar.title("finlab")
 has_facts = (get_settings().warehouse_dir / "fact").is_dir()
-page = st.sidebar.radio("Page", PAGES, index=0 if has_facts else 3)
+page = st.sidebar.radio("Page", PAGES)
+if page == "Marché en direct":
+    from finlab.ui.live import render
+
+    render()
+    st.stop()
 if page == "Weekly brief":
     from finlab.ui.weekly import render
 

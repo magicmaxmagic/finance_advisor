@@ -27,7 +27,7 @@ logged in — without it the snapshot only fires while you have a session.
 ## cron (alternative)
 
 ```cron
-30 18 * * 1-5 cd $HOME/Documents/finance_advisor && /usr/bin/env uv run finlab ingest universe >> data/universe-cron.log 2>&1
+30 18 * * 1-5 cd $HOME/Documents/projets/finance_advisor && /usr/bin/env uv run finlab ingest universe >> data/universe-cron.log 2>&1
 ```
 
 ## What it does and does not protect against

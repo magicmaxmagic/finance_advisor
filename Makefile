@@ -1,7 +1,8 @@
 # finlab
 #
-# `make run` launches the read-only UI. `make bootstrap` takes a fresh clone all
-# the way there. Everything runs through `uv run`, so no virtualenv activation.
+# `make app` launches the React frontend and FastAPI backend. `make run` launches
+# the legacy Streamlit UI. `make bootstrap` takes a fresh clone all the way there.
+# Python commands run through `uv`; frontend commands run through `npm`.
 #
 # Recipes use tabs, not spaces — that is Make, not a style choice.
 
@@ -14,7 +15,7 @@ AS_OF ?= $(shell date +%F)
 DATA_DIR ?= data
 WAREHOUSE := $(DATA_DIR)/warehouse/fact
 
-.PHONY: help setup env ingest concepts metrics run ui test lint fmt check \
+.PHONY: help setup env ingest concepts metrics run ui api web stop test lint fmt check \
         coverage status clean clean-data bootstrap universe submissions schedule \
         daemon queue schedule-daemon
 
@@ -68,7 +69,7 @@ metrics: ## Compute the ratio set at AS_OF
 
 bootstrap: setup env ingest submissions concepts metrics universe ## Fresh clone to a running app, in one go
 	@echo
-	@echo "ready — now run: make run"
+	@echo "ready — now run: make app (React + FastAPI), or make run (legacy Streamlit)"
 
 # --- the daemon -------------------------------------------------------------
 
@@ -93,6 +94,18 @@ run: ## Launch the read-only UI on HOST:PORT
 	uv run finlab ui --host $(HOST) --port $(PORT)
 
 ui: run ## Alias for run
+
+api: ## Launch the FastAPI backend on HOST:8000
+	uv run finlab api --host $(HOST) --port 8000
+
+web: ## Launch the React/Vite frontend on HOST:5173
+	cd frontend && npm run dev -- --host $(HOST) --port 5173
+
+app: ## Launch FastAPI and Vite together
+	@uv run finlab api --host $(HOST) --port 8000 & \
+	api_pid=$$!; \
+	trap 'kill $$api_pid 2>/dev/null || true' EXIT INT TERM; \
+	cd frontend && npm run dev -- --host $(HOST) --port 5173
 
 # --- checks -----------------------------------------------------------------
 
@@ -124,3 +137,17 @@ clean: ## Remove caches and build artefacts
 clean-data: ## Delete the warehouse and database, but keep raw downloads
 	rm -rf $(DATA_DIR)/warehouse $(DATA_DIR)/db $(DATA_DIR)/staging
 	@echo "raw downloads kept in $(DATA_DIR)/raw — 'make concepts metrics' after re-ingest"
+
+stop: ## Stop FastAPI, Vite and the legacy Streamlit app
+	@pids=""; \
+	for port in 8000 5173 $(PORT); do \
+		found="$$(lsof -ti tcp:"$$port" -sTCP:LISTEN 2>/dev/null)"; \
+		pids="$$pids $$found"; \
+	done; \
+	pids="$$(echo $$pids | xargs -n1 2>/dev/null | sort -u | xargs 2>/dev/null)"; \
+	if [ -n "$$pids" ]; then \
+		kill $$pids 2>/dev/null || true; \
+		echo "stopped finlab app processes"; \
+	else \
+		echo "no finlab app processes listening on ports 8000, 5173 or $(PORT)"; \
+	fi

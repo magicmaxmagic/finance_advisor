@@ -44,7 +44,9 @@ def render(directory: Path) -> None:
     st.caption(f"Market source: {brief['source']}. Generated {brief['generated_at'][:10]} UTC.")
     rows = brief["rows"]
     buys = [r for r in rows if r["status"] == "Buy candidate"]
-    covered = [r for r in rows if "tests" in r]
+    covered = [
+        r for r in rows if r.get("tests") and all(t["passed"] is not None for t in r["tests"])
+    ]
     left, center, right = st.columns(3)
     left.metric("Buy candidates", len(buys))
     center.metric("Fully evaluated", f"{len(covered)} / {len(rows)}")
@@ -95,8 +97,15 @@ def render(directory: Path) -> None:
     st.write(row["reason"])
     if "tests" in row:
         for rule in row["tests"]:
-            st.write(("✓ " if rule["passed"] else "✗ ") + rule["detail"])
-        if row["yield_price_ceiling"] > 0:
+            st.write(
+                ("? " if rule["passed"] is None else "✓ " if rule["passed"] else "✗ ")
+                + rule["detail"]
+            )
+            if rule.get("reference"):
+                st.caption(rule["reference"])
+        if row.get("yield_price_ceiling") is None:
+            st.write("Price ceiling unavailable: a reliable annual EPS/share basis is required.")
+        elif row["yield_price_ceiling"] > 0:
             st.write(
                 f"**Price sensitivity.** With fiscal-year diluted EPS of "
                 f"USD {row['evidence']['Diluted EPS']['value']:.2f}, the 4% yield rule allows "
@@ -139,7 +148,8 @@ def render(directory: Path) -> None:
         )
         st.caption(
             "These are the stock's observed returns across all sampled periods. "
-            "The frequency includes periods when the screen would have rejected the stock."
+            "The frequency includes periods when the screen would have rejected the stock. "
+            "This historical frequency does not measure the probability of success of the signal."
         )
     if "evidence" in row:
         st.markdown("**Filing evidence**")

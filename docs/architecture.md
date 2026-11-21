@@ -18,7 +18,7 @@
 
 ## 1. Physical layout
 
-```
+```text
 /data
   /raw/                     immutable, gzip, named by sha256
     companyfacts/2026-08-02/companyfacts.zip
@@ -43,15 +43,18 @@
 ## 2. Layer map
 
 | Layer | Contents | LLM? |
-|---|---|---|
+| --- | --- | --- |
 | L0 Raw | byte-identical downloads, sha256-addressed | no |
 | L1 Core | `entity`, `filing`, `fact`, `security`, `price_daily`, `corporate_action` | no |
 | L2 Canonical | `concept_map`, `fundamentals_pit` (view), `universe_snapshot` | no |
 | L3 Derived | `metric`, `valuation_run`, `signal_value` | no |
 | L4 Text | `document`, `document_section`, `extraction` | **yes** |
 | L5 Output | `report`, `claim`, `backtest_run`, `backtest_metric` | partial |
+| Presentation | FastAPI read-only routes and React/Vite market workstation | no |
 
-L1–L3 can run over the entire universe every day for free. L4 is the only layer that spends quota.
+L1–L3 can run over the entire universe every day for free. L4 is the only layer that spends quota. Presentation clients never open the write DuckDB connection: FastAPI and Streamlit use read-only/in-memory readers, and React communicates only with HTTP routes.
+
+FastAPI routes are implemented in `src/finlab/api/app.py`: `GET /api/health`, `GET /api/universe`, and `GET /api/market/live`. The React 19/TypeScript/Vite source lives in `frontend/` and proxies `/api/*` to FastAPI during development. The legacy Streamlit UI remains available through `make run`; the React application is launched through `make app` or `make web`.
 
 ---
 
@@ -333,7 +336,7 @@ Never send a whole 10-K. Split on `Item` headers first — Item 7 alone is 15–
 ### Model routing
 
 | Job | Model | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Section classification, boilerplate detection | `gpt-oss:20b` | high volume, trivial task |
 | Structured field extraction | `gpt-oss:120b` | accuracy on segment tables matters |
 | Report narrative synthesis | `gpt-oss:120b` / `deepseek-v3.1` | once per report |
@@ -457,7 +460,7 @@ State machine: `pending → running → done | failed | deadletter`. Retry with 
 ### Schedule
 
 | Cadence | Job |
-|---|---|
+| --- | --- |
 | Daily 06:00 | universe snapshot, prices, EDGAR daily index |
 | Daily 07:00 | new filings → fetch → section split → enqueue extractions |
 | Daily 08:00 | L2/L3 rebuild for affected CIKs, full-universe screen |
@@ -465,25 +468,11 @@ State machine: `pending → running → done | failed | deadletter`. Retry with 
 | Weekly | full companyfacts refresh, concept coverage check |
 | On demand | valuation runs, report composition, backtests |
 
----
+### Presentation processes
 
-## 9. Build order
+- FastAPI listens on `127.0.0.1:8000` and exposes `/api/health`, `/api/universe`, and `/api/market/live`.
+- Vite listens on `127.0.0.1:5173` and proxies `/api/*` to FastAPI.
+- Streamlit remains on `127.0.0.1:8501` by default as the legacy UI.
+- `make app` starts FastAPI and Vite together; `make api` and `make web` start them independently.
 
-1. `entity`, `security`, `filing`, `fact`, `concept_map`, `fundamentals_asof` — plus the coverage check. **No LLM anywhere.** This is the spine; everything else is optional.
-2. `price_daily`, `universe_snapshot`, `metric` — a full-universe screen you can run daily.
-3. `document_section` + one extraction schema + the critic loop + `report`. One company, end to end.
-4. `signal_value`, `research_trial`, `backtest_run` — only once step 1 is genuinely PIT-correct.
-
-Steps 1 and 2 are perhaps two weekends and deliver most of the practical value. Step 4 is where projects like this usually die; do not start it early.
-
----
-
-## 10. Open risks
-
-| Risk | Mitigation |
-|---|---|
-| No free PIT price history with delistings | Snapshot the universe daily from now; label pre-2026 backtests as contaminated |
-| Concept mapping drift across years/companies | Coverage check in CI, fail below 95 % on the top 1000 |
-| 16 GB ceiling on cross-sectional joins | `memory_limit=9GB`, aggregate in SQL, spill to disk |
-| Quota burst during earnings season | Priority queue + retry, screening stays LLM-free |
-| Overfitting the signal layer | `research_trial` ledger + deflated Sharpe + purged CV |
+These processes do not open `finlab.duckdb` read-write. They follow the in-memory reader or Parquet paths defined above.
