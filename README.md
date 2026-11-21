@@ -1,23 +1,24 @@
-# finlab
+# FinLab
 
-FinLab is a fully local financial research platform split into two applications:
+FinLab is a local, self-hosted two-application financial research platform:
 
-- **Data Engine**: SEC, Yahoo, Stooq and universe ingestion; DuckDB/Parquet warehouse; one writer; snapshot publication.
-- **Analytics**: read-only FastAPI and React interface; point-in-time fundamentals, factors, ranking, backtesting and weekly research.
+- **Data Engine**: SEC filing data, Yahoo/Stooq/Alpaca price adapters, universe snapshots, DuckDB/Parquet publication and the only writer process.
+- **Analytics**: read-only FastAPI and React interface for warehouse status, point-in-time facts, market factors, explainable rankings and company analysis.
 
-No paid data provider or cloud database is required.
+No paid market-data provider or cloud database is required.
 
 ## Quick start
 
 ```bash
 make setup
 make env
+# Set FINLAB_SEC_USER_AGENT to a real contact address in .env.
+make ingest
+make universe
+make prices-yahoo
 make start
 make status
-make stop
 ```
-
-The `start` target launches the Data Engine, Analytics API and React frontend in the background. Logs are written to `.finlab/logs/`.
 
 Open:
 
@@ -25,38 +26,65 @@ Open:
 - Analytics API: http://127.0.0.1:8000
 - OpenAPI: http://127.0.0.1:8000/docs
 
-## Commands
+Stop all local services:
+
+```bash
+make stop
+```
+
+## Main commands
 
 | Target | Purpose |
 |---|---|
 | `setup` | Install Python dependencies and initialize DuckDB |
 | `start` | Start Data Engine, Analytics API and React |
-| `status` | Show service PIDs and listeners |
-| `stop` | Stop Data Engine, Analytics API and React |
-| `engine-publish` | Publish a versioned warehouse snapshot |
+| `status` | Show PIDs and active listeners |
+| `stop` | Stop all local FinLab services |
 | `ingest` | Ingest the fixed SEC PoC universe |
-| `prices-yahoo` | Backfill Yahoo OHLCV |
-| `universe` | Capture the immutable daily universe snapshot |
-| `submissions` | Backfill filing submission metadata |
-| `concepts` | Load concepts and derive Q4 |
-| `metrics` | Recompute metrics |
+| `prices-yahoo` | Backfill daily Yahoo OHLCV |
+| `universe` | Capture one immutable universe snapshot |
+| `submissions` | Backfill SEC filing metadata |
+| `concepts` | Load concept mappings and derive Q4 |
+| `metrics` | Recompute derived metrics |
+| `engine-publish` | Publish a versioned warehouse snapshot |
 | `test` | Run backend tests |
-| `lint` | Run Ruff checks |
+| `lint` | Run Ruff lint and format checks |
 | `frontend-build` | Build and lint React |
-| `check` | Run backend and frontend CI checks |
+| `check` | Run backend and frontend CI-style validation |
 
-Override dates with `make prices-yahoo START=1996-01-01 END=2026-11-21`.
+Override Yahoo dates with:
+
+```bash
+make prices-yahoo START=1996-01-01 END=2026-11-21
+```
+
+## Analytics views
+
+- **Overview**: warehouse and methodology summary.
+- **Ranking**: real descriptive ranking using earnings yield, momentum, volatility and maximum drawdown.
+- **Company**: selected issuer, latest filing, recent SEC facts and historical closes.
+- **Data**: warehouse counts and date coverage.
+
+Scores are descriptive research outputs, not guarantees of profit or unsupported buy/sell recommendations.
+
+## API
+
+- `GET /api/health`
+- `GET /api/universe`
+- `GET /api/warehouse/status`
+- `GET /api/warehouse/assets/{ticker}`
+- `GET /api/analytics/rankings?as_of=YYYY-MM-DD`
 
 ## Architecture invariants
 
 1. Exactly one process writes DuckDB through `write_conn()`.
-2. Analytics never opens a market-data provider or a read-write database connection.
-3. Fundamentals use `fund fundamentals_asof(as_of)`-style PIT macros; no future filing may affect an `as_of` result.
-4. Raw observations are immutable. Derived data carries provenance and calculation versions.
-5. Analytics consumes only a validated published warehouse snapshot.
+2. Analytics never calls a market-data provider or opens the DuckDB writer.
+3. Fundamentals are resolved through point-in-time macros.
+4. Raw observations remain immutable; derived observations carry provenance and calculation versions.
+5. Analytics should consume a published and validated warehouse snapshot.
 
 ## Stack
 
-Python 3.12, uv, DuckDB, Parquet, Polars, FastAPI, React 19, TypeScript, Vite, APScheduler, Pydantic, NumPy, SciPy and pytest/Ruff.
+Python 3.12, uv, DuckDB, Parquet, Polars, FastAPI, React 19, TypeScript, Vite, APScheduler, Pydantic, NumPy, pytest and Ruff.
 
 Full design: `docs/architecture.md`.

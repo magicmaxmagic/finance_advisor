@@ -577,3 +577,29 @@ td small {
 .progress i { display: block; height: 100%; background: #62c4a3; border-radius: 20px; }
 .step-meta { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: 8px; color: #65716d; font-size: 11px; }
 .ingestion-step small { display: block; margin-top: 8px; color: #87958f; }
+
+.toolbar { display: flex; align-items: end; gap: 12px; margin: 14px 0; background: #fff; border: 1px solid #dde3e0; border-radius: 9px; padding: 12px 14px; }
+.toolbar label { display: grid; gap: 5px; color: #718078; font-size: 11px; font-weight: 700; }
+.toolbar input, .toolbar select { height: 38px; min-width: 190px; border: 1px solid #d8dfdc; border-radius: 7px; background: #fafbfa; padding: 0 10px; color: #1a2420; }
+.toolbar p { margin: 0 0 8px auto; color: #718078; font-size: 12px; }
+.table-shell tbody tr { cursor: pointer; }
+.table-shell tbody tr:hover { background: #f7faf8; }
+.status.high-priority-research { background: #dff3e9; color: #246b54; }
+.status.attractive-research { background: #e3eef8; color: #416d96; }
+.status.neutral { background: #edf0ef; color: #65716d; }
+.status.caution { background: #fae7dc; color: #9b5b35; }
+.status.insufficient-data { background: #edf0ef; color: #65716d; }
+.company-view { display: grid; gap: 14px; }
+.company-header { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #dde3e0; border-radius: 9px; padding: 18px 22px; }
+.company-header h2 { margin: 2px 0 4px; font-family: Georgia, serif; }
+.score-ring { width: 88px; height: 88px; border-radius: 50%; border: 8px solid #62c4a3; display: grid; place-content: center; text-align: center; }
+.score-ring strong { font-family: Georgia, serif; font-size: 22px; }.score-ring span { color: #718078; font-size: 9px; text-transform: uppercase; }
+.company-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.company-grid article { display: grid; background: #fff; border: 1px solid #dde3e0; border-radius: 9px; padding: 14px; }.company-grid article span, .company-grid article small { color: #718078; }.company-grid article strong { margin: 8px 0 3px; font-family: Georgia, serif; }
+.content-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; }
+.panel { background: #fff; border: 1px solid #dde3e0; border-radius: 9px; padding: 16px; }.panel h3 { margin: 0 0 12px; font-family: Georgia, serif; }
+.sparkline { width: 100%; height: 220px; background: linear-gradient(180deg, #fbfdfc 0%, #fff 100%); }
+.fact-list { display: grid; }.fact-list div { display: grid; grid-template-columns: 1.4fr .6fr; gap: 8px; border-top: 1px solid #edf0ef; padding: 9px 0; }.fact-list small { grid-column: 1 / -1; color: #87958f; }
+.rank-list { display: grid; grid-template-columns: 80px 70px 1fr; align-items: center; border-top: 1px solid #edf0ef; padding: 8px 0; }.rank-list span { font-family: Georgia, serif; font-size: 18px; }.rank-list small { color: #718078; }
+.as-of { display: grid; text-align: right; }.as-of span { color: #718078; font-size: 9px; letter-spacing: 1.4px; }.as-of strong { font-family: Georgia, serif; }
+@media (max-width: 980px) { .company-grid { grid-template-columns: repeat(2, 1fr); }.content-grid { grid-template-columns: 1fr; }.toolbar { flex-wrap: wrap; }.toolbar p { width: 100%; margin: 5px 0 0; } }

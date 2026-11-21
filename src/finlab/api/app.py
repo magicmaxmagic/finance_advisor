@@ -193,6 +193,161 @@ def data_refresh() -> dict:
     }
 
 
+@app.get("/api/analytics/rankings")
+def analytics_rankings(as_of: Annotated[str | None, Query()] = None) -> dict:
+    """Rank local securities using real completed-price history and SEC facts."""
+    from datetime import date
+    from math import isfinite, sqrt
+
+    from finlab.config import get_settings
+    from finlab.db.conn import attach_warehouse_views, read_conn
+
+    cutoff = date.fromisoformat(as_of) if as_of else date.today()
+    cfg = get_settings()
+    rows: list[dict] = []
+    with read_conn(cfg) as con:
+        attached = set(attach_warehouse_views(con, cfg))
+        if "security" not in attached or "entity" not in attached or "price_daily" not in attached:
+            return {
+                "as_of": cutoff.isoformat(),
+                "rows": [],
+                "reason": "Warehouse price/security data unavailable",
+            }
+
+        securities = con.execute(
+            "SELECT s.security_id, s.ticker, e.name, e.sector, s.currency "
+            "FROM security s JOIN entity e ON e.cik = s.cik "
+            "WHERE s.is_active = TRUE AND s.ticker IS NOT NULL ORDER BY s.ticker"
+        ).fetchall()
+
+        for security_id, ticker, name, sector, currency in securities:
+            prices = con.execute(
+                "SELECT date, close FROM price_daily "
+                "WHERE security_id = ? AND date <= ? AND close IS NOT NULL "
+                "ORDER BY date DESC LIMIT 252",
+                [security_id, cutoff],
+            ).fetchall()
+            if len(prices) < 21:
+                continue
+            ordered = list(reversed(prices))
+            closes = [float(r[1]) for r in ordered]
+            latest = closes[-1]
+
+            def period_return(
+                days: int, values: list[float] = closes, last: float = latest
+            ) -> float | None:
+                if len(values) <= days:
+                    return None
+                prior = values[-days - 1]
+                return last / prior - 1 if prior > 0 else None
+
+            returns = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+            finite_returns = [r for r in returns if isfinite(r)]
+            volatility = (
+                (sum(r * r for r in finite_returns) / len(finite_returns)) ** 0.5 * sqrt(252)
+                if finite_returns
+                else None
+            )
+            peak = closes[0]
+            drawdown = 0.0
+            for close in closes:
+                peak = max(peak, close)
+                drawdown = min(drawdown, close / peak - 1)
+
+            latest_eps = None
+            latest_revenue = None
+            if "fact" in attached:
+                cik_row = con.execute(
+                    "SELECT cik FROM security WHERE security_id = ? LIMIT 1", [security_id]
+                ).fetchone()
+                if cik_row:
+                    annual_facts = con.execute(
+                        "SELECT tag, value, period_end, filed_date FROM fact "
+                        "WHERE cik = ? AND filed_date <= ? AND duration_bucket = 'annual' "
+                        "AND tag IN ('Revenues','RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet','NetIncomeLoss','EarningsPerShareDiluted') "
+                        "ORDER BY period_end DESC, filed_date DESC LIMIT 12",
+                        [cik_row[0], cutoff],
+                    ).fetchall()
+                    latest_revenue = next(
+                        (
+                            float(r[1])
+                            for r in annual_facts
+                            if r[0]
+                            in (
+                                "Revenues",
+                                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                                "SalesRevenueNet",
+                            )
+                        ),
+                        None,
+                    )
+                    latest_eps = next(
+                        (float(r[1]) for r in annual_facts if r[0] == "EarningsPerShareDiluted"),
+                        None,
+                    )
+
+            earnings_yield = latest_eps / latest if latest_eps is not None and latest > 0 else None
+            momentum = period_return(252)
+            relative_momentum = (period_return(126) or 0) - (period_return(21) or 0)
+            components = [
+                v
+                for v in (
+                    earnings_yield,
+                    momentum,
+                    relative_momentum,
+                    -volatility if volatility is not None else None,
+                )
+                if v is not None and isfinite(v)
+            ]
+            score = 50.0
+            if components:
+                positive = sum(1 for v in components if v >= 0)
+                score = max(
+                    0.0, min(100.0, 50.0 + 10.0 * (positive - (len(components) - positive)))
+                )
+
+            category = "Insufficient data"
+            if earnings_yield is not None or momentum is not None:
+                category = (
+                    "High-priority research"
+                    if score >= 65
+                    else "Attractive research"
+                    if score >= 55
+                    else "Neutral"
+                    if score >= 45
+                    else "Caution"
+                )
+
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "name": name,
+                    "sector": sector,
+                    "currency": currency or "USD",
+                    "price": latest,
+                    "earnings_yield": earnings_yield,
+                    "momentum_12m": momentum,
+                    "momentum_3m": period_return(63),
+                    "momentum_1m": period_return(21),
+                    "volatility": volatility,
+                    "max_drawdown": drawdown,
+                    "revenue": latest_revenue,
+                    "score": round(score, 1),
+                    "category": category,
+                    "data_status": "complete"
+                    if len(prices) >= 252 and earnings_yield is not None
+                    else "partial",
+                }
+            )
+
+    rows.sort(key=lambda r: (-r["score"], r["ticker"]))
+    return {
+        "as_of": cutoff.isoformat(),
+        "method": "earnings_yield/momentum/risk descriptive research",
+        "rows": rows,
+    }
+
+
 @app.get("/api/market/live")
 def market_live(
     tickers: Annotated[list[str] | None, Query()] = None,

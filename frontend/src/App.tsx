@@ -2,118 +2,95 @@ import { useEffect, useState } from 'react'
 import './App.css'
 
 type Company = { cik: number; ticker: string; name: string; sector: string }
-type Test = { name: string; threshold: string; detail: string; passed: boolean | null; reference: string }
-type Row = {
+type WarehouseStatus = {
+  datasets: { entity: number; filing: number; security: number; fact: number; price_daily: number }
+  fundamental_range: [string | null, string | null]
+  price_range: [string | null, string | null]
+}
+type Ranking = {
   ticker: string
+  name: string
   sector: string
-  status: 'Buy candidate' | 'Watch' | 'Insufficient data'
-  reason: string
-  price: number | null
-  day_change: number | null
+  currency: string
+  price: number
   earnings_yield: number | null
-  ceiling_gap: number | null
-  yield_price_ceiling: number | null
-  transaction_time: string | null
-  tests: Test[]
+  momentum_12m: number | null
+  momentum_3m: number | null
+  momentum_1m: number | null
+  volatility: number | null
+  max_drawdown: number
+  revenue: number | null
+  score: number
+  category: string
+  data_status: string
 }
-type Dashboard = { mode: string; session: { label?: string; is_open?: boolean }; refreshed_at?: string; rows: Row[] }
-
-type WarehouseStatus = { datasets: { entity: number; filing: number; security: number; fact: number; price_daily: number }; fundamental_range: [string | null, string | null]; price_range: [string | null, string | null] }
-type WarehouseAsset = { ticker: string; available: boolean; reason?: string; company?: { cik: number; name: string; sector: string; currency: string | null; exchange: string | null; security_id: string }; latest_filing?: { accession_number: string; form: string; filed_date: string } | null; facts: Array<{ taxonomy: string; tag: string; unit: string; period_end: string; duration_bucket: string; value: number; filed_date: string }>; prices: Array<{ date: string; close: number; volume: number | null; source: string | null }> }
-type DashboardWarehouseStatus = WarehouseStatus
-
-const statusLabels: Record<Row['status'], string> = {
-  'Buy candidate': 'Candidate à acheter',
-  Watch: 'À surveiller',
-  'Insufficient data': 'Données insuffisantes',
+type Rankings = { as_of: string; method: string; rows: Ranking[] }
+type WarehouseAsset = {
+  ticker: string
+  available: boolean
+  reason?: string
+  company?: { cik: number; name: string; sector: string; currency: string | null; exchange: string | null }
+  latest_filing?: { accession_number: string; form: string; filed_date: string; primary_doc_url: string | null } | null
+  facts: Array<{ taxonomy: string; tag: string; unit: string; period_end: string; duration_bucket: string; value: number; filed_date: string }>
+  prices: Array<{ date: string; close: number; volume: number | null; source: string | null }>
 }
 
-const money = (value: number | null) => value == null ? '—' : `$${value.toFixed(2)}`
 const percent = (value: number | null) => value == null ? '—' : `${(value * 100).toFixed(1)}%`
+const money = (value: number | null) => value == null ? '—' : `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 
 function App() {
   const [companies, setCompanies] = useState<Company[]>([])
-  const [selected, setSelected] = useState(['AAPL', 'MSFT', 'JPM'])
-  const [mode, setMode] = useState<'demo' | 'live'>('demo')
-  const [demoPrice, setDemoPrice] = useState(99)
-  const [data, setData] = useState<Dashboard | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [rankings, setRankings] = useState<Rankings | null>(null)
+  const [warehouse, setWarehouse] = useState<WarehouseStatus | null>(null)
+  const [selected, setSelected] = useState('AAPL')
+  const [asset, setAsset] = useState<WarehouseAsset | null>(null)
+  const [page, setPage] = useState<'Overview' | 'Ranking' | 'Company' | 'Data'>('Ranking')
+  const [sector, setSector] = useState('Tous')
+  const [query, setQuery] = useState('')
   const [error, setError] = useState('')
-  const [warehouseStatus, setWarehouseStatus] = useState<DashboardWarehouseStatus | null>(null)
-  const [warehouseAsset, setWarehouseAsset] = useState<WarehouseAsset | null>(null)
 
   useEffect(() => {
-    fetch('/api/universe').then((response) => response.json()).then((payload) => setCompanies(payload.companies)).catch(() => setError('Impossible de joindre le backend.'))
+    Promise.all([
+      fetch('/api/universe').then((response) => response.json()),
+      fetch('/api/warehouse/status').then((response) => response.json()),
+      fetch('/api/analytics/rankings').then((response) => response.json()),
+    ]).then(([universe, warehouseData, rankingData]) => {
+      setCompanies(universe.companies)
+      setWarehouse(warehouseData)
+      setRankings(rankingData)
+    }).catch(() => setError('Impossible de charger les données locales.'))
   }, [])
 
   useEffect(() => {
-    let active = true
-    const loadStatus = async () => {
-      try {
-        const response = await fetch('/api/warehouse/status')
-        if (response.ok && active) setWarehouseStatus(await response.json())
-      } catch {
-        // Status remains available at its last successful snapshot.
-      }
-    }
-    loadStatus()
-    const timer = window.setInterval(loadStatus, 5000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [])
-
-  useEffect(() => {
-    const ticker = selected[0]
-    if (!ticker) return
-    fetch(`/api/warehouse/assets/${ticker}`)
+    fetch(`/api/warehouse/assets/${selected}`)
       .then((response) => response.json())
-      .then((payload) => setWarehouseAsset(payload))
-      .catch(() => setWarehouseAsset(null))
+      .then(setAsset)
+      .catch(() => setAsset(null))
   }, [selected])
 
-  useEffect(() => {
-    let active = true
-    const load = async () => {
-      setLoading(true)
-      setError('')
-      const params = new URLSearchParams()
-      selected.forEach((ticker) => params.append('tickers', ticker))
-      params.set('demo', String(mode === 'demo'))
-      params.set('demo_price', String(demoPrice))
-      try {
-        const response = await fetch(`/api/market/live?${params}`)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const payload = await response.json()
-        if (active) setData(payload)
-      } catch (exception) {
-        if (active) setError(exception instanceof Error ? exception.message : 'Erreur inconnue')
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
-    load()
-    const timer = window.setInterval(load, 15_000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [selected, mode, demoPrice])
-
-  const toggle = (ticker: string) => setSelected((current) => current.includes(ticker) ? current.filter((item) => item !== ticker) : [...current, ticker])
+  const sectors = ['Tous', ...Array.from(new Set(companies.map((company) => company.sector))).sort()]
+  const rows = (rankings?.rows ?? []).filter((row) =>
+    (sector === 'Tous' || row.sector === sector) &&
+    (!query || `${row.ticker} ${row.name}`.toLowerCase().includes(query.toLowerCase()))
+  )
 
   return (
     <main>
       <aside>
         <div className="brand"><span>FIN</span>LAB</div>
-        <p className="eyebrow">RESEARCH WORKSTATION</p>
+        <p className="eyebrow">DATA-DRIVEN RESEARCH</p>
         <nav>
-          <button className="nav-active"><span>◫</span> Marché en direct</button>
-          <button disabled><span>◫</span> Weekly brief</button>
-          <button disabled><span>◫</span> Company</button>
-          <button className="nav-active"><span>◫</span> Data Center</button>
+          {(['Overview', 'Ranking', 'Company', 'Data'] as const).map((item) => (
+            <button key={item} className={page === item ? 'nav-active' : ''} onClick={() => setPage(item)}>
+              <span>{item === 'Overview' ? '◫' : item === 'Ranking' ? '◆' : item === 'Company' ? '●' : '▦'}</span>{item === 'Overview' ? 'Vue générale' : item === 'Ranking' ? 'Classement' : item === 'Company' ? 'Analyse' : 'Data Center'}
+            </button>
+          ))}
         </nav>
-        <div className="watchlist-head"><span>WATCHLIST</span><b>{selected.length}</b></div>
+        <div className="watchlist-head"><span>UNIVERS</span><b>{companies.length}</b></div>
         <div className="ticker-list">
           {companies.map((company) => (
-            <button key={company.ticker} className={selected.includes(company.ticker) ? 'ticker selected' : 'ticker'} onClick={() => toggle(company.ticker)}>
+            <button key={company.ticker} className={selected === company.ticker ? 'ticker selected' : 'ticker'} onClick={() => { setSelected(company.ticker); setPage('Company') }}>
               <span><strong>{company.ticker}</strong><small>{company.name}</small></span>
-              {selected.includes(company.ticker) && <i>✓</i>}
             </button>
           ))}
         </div>
@@ -121,81 +98,71 @@ function App() {
 
       <section className="workspace">
         <header>
-          <div>
-            <p className="eyebrow">MARKET INTELLIGENCE</p>
-            <h1>Marché en direct</h1>
-          </div>
-          <div className="controls">
-            <div className="segmented">
-              <button className={mode === 'demo' ? 'active' : ''} onClick={() => setMode('demo')}>Démo</button>
-              <button className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}>Live</button>
-            </div>
-            {mode === 'demo' && <button className="price-control" onClick={() => setDemoPrice((value) => value <= 100 ? 101 : 99)}>${demoPrice.toFixed(0)}</button>}
-          </div>
+          <div><p className="eyebrow">LOCAL WAREHOUSE</p><h1>{page === 'Overview' ? 'Vue générale' : page === 'Ranking' ? 'Classement quantitatif' : page === 'Company' ? 'Analyse fondamentale' : 'Data Center'}</h1></div>
+          {rankings && <div className="as-of"><span>POINT-IN-TIME</span><strong>{rankings.as_of}</strong></div>}
         </header>
 
-        {mode === 'demo' && <div className="notice"><b>DÉMONSTRATION FICTIVE</b><span>Les données et prix sont simulés.</span></div>}
-        {mode === 'live' && warehouseStatus && <div className="notice"><b>DONNÉES INGÉRÉES</b><span>{warehouseStatus.datasets.fact.toLocaleString('fr-FR')} faits · {warehouseStatus.datasets.price_daily.toLocaleString('fr-FR')} prix · {warehouseStatus.datasets.filing.toLocaleString('fr-FR')} filings</span></div>}
-        {mode === 'live' && warehouseAsset?.available && <div className="data-center">
-          <div className="table-title"><h2>{warehouseAsset.company?.name}</h2><small>{warehouseAsset.ticker} · données locales</small></div>
-          <div className="step-meta" style={{ padding: '14px 18px' }}>
-            <span>{warehouseAsset.facts.length} facts récents</span>
-            <span>{warehouseAsset.prices.length} prix disponibles</span>
-            <span>{warehouseAsset.latest_filing?.form ?? 'Filing'} · {warehouseAsset.latest_filing?.filed_date ?? '—'}</span>
-            <span>{warehouseAsset.company?.sector ?? 'Secteur indisponible'}</span>
-          </div>
-        </div>}
-        <div className="data-center">
-          <div className="table-title"><h2>Data Center</h2><small>Warehouse local</small></div>
-          {warehouseStatus ? (
-            <div className="step-meta" style={{ padding: '14px 18px' }}>
-              <span>{warehouseStatus.datasets.fact.toLocaleString('fr-FR')} faits</span>
-              <span>{warehouseStatus.datasets.price_daily.toLocaleString('fr-FR')} prix</span>
-              <span>{warehouseStatus.datasets.filing.toLocaleString('fr-FR')} filings</span>
-              <span>{warehouseStatus.datasets.entity.toLocaleString('fr-FR')} entreprises</span>
-            </div>
-          ) : <div className="empty">Chargement du warehouse…</div>}
-        </div>
         {error && <div className="error">{error}</div>}
 
-        <div className="metrics">
-          <article><span>Candidats</span><strong>{data?.rows.filter((row) => row.status === 'Buy candidate').length ?? 0}</strong></article>
-          <article><span>Valeurs suivies</span><strong>{data?.rows.length ?? 0}</strong></article>
-          <article><span>Horizon</span><strong>3–12 mois</strong></article>
-          <article><span>Séance</span><strong>{data?.session.label ?? '—'}</strong></article>
-        </div>
+        {warehouse && (
+          <div className="metrics">
+            <article><span>Entreprises</span><strong>{warehouse.datasets.entity.toLocaleString('fr-FR')}</strong></article>
+            <article><span>Faits SEC</span><strong>{warehouse.datasets.fact.toLocaleString('fr-FR')}</strong></article>
+            <article><span>Clôtures</span><strong>{warehouse.datasets.price_daily.toLocaleString('fr-FR')}</strong></article>
+            <article><span>Filings</span><strong>{warehouse.datasets.filing.toLocaleString('fr-FR')}</strong></article>
+          </div>
+        )}
 
-        <div className="table-shell">
-          <div className="table-title"><h2>Watchlist</h2><small>{loading ? 'Actualisation…' : data?.refreshed_at ? `Actualisé ${new Date(data.refreshed_at).toLocaleTimeString('fr-FR')}` : ''}</small></div>
-          <table>
-            <thead><tr><th>Titre</th><th>Statut</th><th>Prix</th><th>Variation jour</th><th>Rendement BPA</th><th>Plafond 4%</th><th>Motif</th></tr></thead>
-            <tbody>
-              {data?.rows.map((row) => (
-                <tr key={row.ticker}>
-                  <td><strong>{row.ticker}</strong><small>{row.sector}</small></td>
-                  <td><span className={`status ${row.status.toLowerCase().replaceAll(' ', '-')}`}>{statusLabels[row.status]}</span></td>
-                  <td>{money(row.price)}</td>
-                  <td className={(row.day_change ?? 0) >= 0 ? 'positive' : 'negative'}>{percent(row.day_change)}</td>
-                  <td>{percent(row.earnings_yield)}</td>
-                  <td>{money(row.yield_price_ceiling)}</td>
-                  <td className="reason">{row.reason}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!data?.rows.length && <div className="empty">Sélectionnez au moins une valeur dans la watchlist.</div>}
-        </div>
-
-        {data?.rows.map((row) => (
-          <details className="detail" key={row.ticker}>
-            <summary><strong>{row.ticker}</strong><span>{statusLabels[row.status]}</span></summary>
-            <div className="tests">
-              {row.tests.map((test) => (
-                <article key={test.name}><span className={test.passed === true ? 'pass' : test.passed === false ? 'fail' : 'unknown'}>{test.passed === true ? '✓' : test.passed === false ? '×' : '?'}</span><div><b>{test.name}</b><p>{test.detail}</p><small>{test.reference}</small></div></article>
-              ))}
+        {page === 'Ranking' && (
+          <>
+            <div className="toolbar">
+              <label>Recherche<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ticker ou entreprise" /></label>
+              <label>Secteur<select value={sector} onChange={(event) => setSector(event.target.value)}>{sectors.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <p>{rows.length} résultats · score descriptif, pas une prédiction de profit</p>
             </div>
-          </details>
-        ))}
+            <div className="table-shell">
+              <table>
+                <thead><tr><th>Rang</th><th>Titre</th><th>Secteur</th><th>Prix réel</th><th>Score</th><th>Catégorie</th><th>Momentum 3m</th><th>Volatilité</th><th>Drawdown</th><th>Qualité données</th></tr></thead>
+                <tbody>{rows.map((row, index) => (
+                  <tr key={row.ticker} onClick={() => { setSelected(row.ticker); setPage('Company') }}>
+                    <td>{index + 1}</td><td><strong>{row.ticker}</strong><small>{row.name}</small></td><td>{row.sector}</td>
+                    <td>{money(row.price)}</td><td><b>{row.score.toFixed(1)}</b></td><td><span className={`status ${row.category.toLowerCase().replaceAll(' ', '-')}`}>{row.category}</span></td>
+                    <td className={(row.momentum_3m ?? 0) >= 0 ? 'positive' : 'negative'}>{percent(row.momentum_3m)}</td>
+                    <td>{percent(row.volatility)}</td><td className="negative">{percent(row.max_drawdown)}</td><td>{row.data_status}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {page === 'Company' && asset && (
+          <div className="company-view">
+            {asset.available ? (
+              <>
+                <div className="company-header"><div><p className="eyebrow">{asset.company?.sector}</p><h2>{asset.company?.name}</h2><small>{asset.ticker} · CIK {asset.company?.cik}</small></div>{warehouse && <div className="score-ring"><strong>{rankings?.rows.find((row) => row.ticker === asset.ticker)?.score.toFixed(1) ?? '—'}</strong><span>score</span></div>}</div>
+                <div className="company-grid">
+                  <article><span>Dernier filing</span><strong>{asset.latest_filing?.form ?? '—'}</strong><small>{asset.latest_filing?.filed_date ?? '—'}</small></article>
+                  <article><span>Prix disponible</span><strong>{asset.prices.length ? money(asset.prices[asset.prices.length - 1].close) : '—'}</strong><small>{asset.prices.length ? asset.prices[asset.prices.length - 1].date : 'Pas de prix'}</small></article>
+                  <article><span>Facts récents</span><strong>{asset.facts.length}</strong><small>observations SEC</small></article>
+                  <article><span>Devise</span><strong>{asset.company?.currency ?? '—'}</strong><small>{asset.company?.exchange ?? 'Lieu non renseigné'}</small></article>
+                </div>
+                <div className="content-grid">
+                  <section className="panel"><h3>Historique des clôtures</h3>{asset.prices.length ? <svg className="sparkline" viewBox="0 0 700 220" preserveAspectRatio="none"><polyline fill="none" stroke="#62c4a3" strokeWidth="3" points={asset.prices.slice(-90).map((price, index, values) => { const closes = values.map((item) => item.close); const min = Math.min(...closes); const max = Math.max(...closes); const x = values.length === 1 ? 0 : index * 700 / (values.length - 1); const y = max === min ? 110 : 210 - (price.close - min) * 190 / (max - min); return `${x},${y}` }).join(' ')} /></svg> : <div className="empty">Aucune clôture disponible</div>}</section>
+                  <section className="panel"><h3>Dernières observations SEC</h3><div className="fact-list">{asset.facts.slice(0, 12).map((fact, index) => <div key={`${fact.tag}-${fact.period_end}-${index}`}><strong>{fact.tag}</strong><span>{fact.value.toLocaleString('fr-FR')} {fact.unit}</span><small>{fact.period_end} · publié {fact.filed_date}</small></div>)}</div></section>
+                </div>
+              </>
+            ) : <div className="empty">Données réelles indisponibles pour {asset.ticker}: {asset.reason}</div>}
+          </div>
+        )}
+
+        {page === 'Overview' && rankings && (
+          <div className="content-grid"><section className="panel"><h3>Top 10 — recherche quantitative</h3>{rankings.rows.slice(0, 10).map((row) => <div className="rank-list" key={row.ticker}><strong>{row.ticker}</strong><span>{row.score.toFixed(1)}</span><small>{row.category}</small></div>)}</section><section className="panel"><h3>Cadre méthodologique</h3><p>Les scores combinent rendement bénéficiaire, momentum, baisse maximale et volatilité des données réellement disponibles. Ils ne constituent pas une recommandation d’achat ou une probabilité de profit.</p><small>{rankings.method} · as of {rankings.as_of}</small></section></div>
+        )}
+
+        {page === 'Data' && warehouse && (
+          <div className="content-grid"><section className="panel"><h3>Couverture du warehouse</h3><div className="fact-list"><div><strong>Faits SEC</strong><span>{warehouse.datasets.fact.toLocaleString('fr-FR')}</span><small>{warehouse.fundamental_range[0]} → {warehouse.fundamental_range[1]}</small></div><div><strong>Prix</strong><span>{warehouse.datasets.price_daily.toLocaleString('fr-FR')}</span><small>{warehouse.price_range[0]} → {warehouse.price_range[1]}</small></div><div><strong>Filings</strong><span>{warehouse.datasets.filing.toLocaleString('fr-FR')}</span></div></div></section><section className="panel"><h3>Provenance</h3><p>SEC pour les fondamentaux; Yahoo ou Stooq/Alpaca seulement au Data Engine; aucune donnée externe appelée par cette vue Analytics.</p></section></div>
+        )}
       </section>
     </main>
   )

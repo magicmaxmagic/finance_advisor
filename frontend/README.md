@@ -1,25 +1,29 @@
 # FinLab React frontend
 
-The React 19/TypeScript/Vite interface consumes the read-only FinLab Analytics FastAPI.
+React 19, TypeScript and Vite frontend for the FinLab Analytics application.
 
 ## Development
 
 ```bash
-make app
+make start
+make stop
 ```
 
-Or run independently:
+The frontend runs at `http://127.0.0.1:5173` and proxies `/api/*` to Analytics FastAPI at `http://127.0.0.1:8000`.
 
-```bash
-make analytics
-make web
-```
+## Views
 
-The frontend proxies `/api/*` to `http://127.0.0.1:8000` in development.
+- Overview
+- Quantitative ranking
+- Company analysis
+- Data Center
+
+The interface uses only real warehouse endpoints and clearly labels data availability. It does not issue guaranteed investment recommendations.
 
 ## Validation
 
 ```bash
+npm ci
 npm run build
 npm run lint
 npm run test --if-present

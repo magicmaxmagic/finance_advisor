@@ -54,7 +54,7 @@
 
 L1–L3 can run over the entire universe every day for free. L4 is the only layer that spends quota. Presentation clients never open the write DuckDB connection: FastAPI Analytics uses read-only/in-memory readers, and React communicates only with HTTP routes.
 
-FastAPI routes are implemented in `src/finlab/api/app.py`: `GET /api/health`, `GET /api/universe`, and `GET /api/market/live`. The React 19/TypeScript/Vite source lives in `frontend/` and proxies `/api/*` to FastAPI during development. The React application is launched through `make app` or `make web`.
+FastAPI routes are implemented in `src/finlab/api/app.py`: `GET /api/health`, `GET /api/universe`, and `GET /api/market/live`. The React 19/TypeScript/Vite source lives in `frontend/` and proxies `/api/*` to FastAPI during development. The React application is launched through `make start`.
 
 ---
 

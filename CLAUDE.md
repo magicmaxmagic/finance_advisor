@@ -56,7 +56,7 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 
 **`uv sync --all-extras` is the development and CI setup.** Use it. A bare
 `uv sync` installs only the core dependencies and will leave M5 (`pydantic-ai`,
-`mlflow`), M7 (`statsmodels`, `quantstats`) and the React/Frontend UI missing.
+`mlflow`), M7 (`statsmodels`, `quantstats`) and and the React frontend missing.
 
 The extras exist so the base install stays small, not so parts of the stack are
 optional: `text`, `eval`, `research`, `ui`. Everything in the stack list above
