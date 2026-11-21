@@ -1,0 +1,11 @@
+# FinLab initial S&P 500 universe configuration.
+# This file contains the public-index scope and ingestion defaults.
+# Constituents and sector membership must be supplied as a dated snapshot.
+
+version: 1
+index: "S&P 500"
+currency: "USD"
+price_provider: "yahoo"
+fundamental_provider: "sec"
+source: "Wikidata or a user-provided dated constituents CSV"
+companies: []

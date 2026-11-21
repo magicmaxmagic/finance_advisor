@@ -42,3 +42,7 @@ def publish() -> None:
     except WriterLockHeld as exc:
         raise typer.Exit(str(exc)) from exc
     typer.echo(f"published epoch={snapshot.epoch} contract={snapshot.contract_version}")
+
+
+if __name__ == "__main__":
+    app()

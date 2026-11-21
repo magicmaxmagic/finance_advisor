@@ -30,3 +30,7 @@ def serve(
 ) -> None:
     """Serve read-only Analytics FastAPI routes."""
     uvicorn.run("finlab.api.app:app", host=host, port=port, reload=False)
+
+
+if __name__ == "__main__":
+    app()

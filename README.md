@@ -12,13 +12,12 @@ No paid data provider or cloud database is required.
 ```bash
 make setup
 make env
-# Set FINLAB_SEC_USER_AGENT in .env to a real contact address.
-
-make engine-publish
-make engine
-make analytics
-make web
+make start
+make status
+make stop
 ```
+
+The `start` target launches the Data Engine, Analytics API and React frontend in the background. Logs are written to `.finlab/logs/`.
 
 Open:
 
@@ -26,23 +25,15 @@ Open:
 - Analytics API: http://127.0.0.1:8000
 - OpenAPI: http://127.0.0.1:8000/docs
 
-Stop local listeners:
-
-```bash
-make stop
-```
-
 ## Commands
 
 | Target | Purpose |
 |---|---|
 | `setup` | Install Python dependencies and initialize DuckDB |
-| `engine` | Run the Data Engine daemon; only writer |
+| `start` | Start Data Engine, Analytics API and React |
+| `status` | Show service PIDs and listeners |
+| `stop` | Stop Data Engine, Analytics API and React |
 | `engine-publish` | Publish a versioned warehouse snapshot |
-| `analytics` | Run read-only Analytics FastAPI |
-| `analytics-status` | Validate the latest warehouse snapshot |
-| `web` | Run React/Vite |
-| `app` | Run Analytics and React together |
 | `ingest` | Ingest the fixed SEC PoC universe |
 | `prices-yahoo` | Backfill Yahoo OHLCV |
 | `universe` | Capture the immutable daily universe snapshot |

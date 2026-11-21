@@ -566,3 +566,14 @@ td small {
     border-right: 0;
   }
 }
+
+.data-center { margin: 16px 0; background: white; border: 1px solid #dde3e0; border-radius: 9px; overflow: hidden; }
+.ingestion-step { padding: 14px 18px; border-top: 1px solid #edf0ef; }
+.step-head { display: flex; justify-content: space-between; align-items: center; }
+.step-head .status.running { background: #dceaf8; color: #416d96; }
+.step-head .status.done { background: #def3ea; color: #27725a; }
+.step-head .status.failed, .step-head .status.deadletter { background: #fae3df; color: #99483e; }
+.progress { height: 7px; margin: 10px 0 8px; background: #edf0ef; border-radius: 20px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: #62c4a3; border-radius: 20px; }
+.step-meta { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: 8px; color: #65716d; font-size: 11px; }
+.ingestion-step small { display: block; margin-top: 8px; color: #87958f; }

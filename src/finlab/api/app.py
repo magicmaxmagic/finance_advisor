@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
@@ -22,6 +23,134 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/warehouse/status")
+def warehouse_status() -> dict:
+    """Real ingested warehouse counts and date coverage."""
+    from finlab.config import get_settings
+    from finlab.db.conn import attach_warehouse_views, read_conn
+
+    cfg = get_settings()
+    with read_conn(cfg) as con:
+        attached = set(attach_warehouse_views(con, cfg))
+
+        def count(name: str) -> int:
+            return (
+                int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0])
+                if name in attached
+                else 0
+            )
+
+        return {
+            "datasets": {
+                "entity": count("entity"),
+                "filing": count("filing"),
+                "security": count("security"),
+                "fact": count("fact"),
+                "price_daily": count("price_daily"),
+            },
+            "fundamental_range": (
+                list(con.execute("SELECT min(filed_date), max(filed_date) FROM fact").fetchone())
+                if "fact" in attached
+                else [None, None]
+            ),
+            "price_range": (
+                list(con.execute("SELECT min(date), max(date) FROM price_daily").fetchone())
+                if "price_daily" in attached
+                else [None, None]
+            ),
+        }
+
+
+@app.get("/api/warehouse/assets/{ticker}")
+def warehouse_asset(ticker: str) -> dict:
+    """Real company identity, latest filing, latest facts and recent prices."""
+    from finlab.config import get_settings
+    from finlab.db.conn import attach_warehouse_views, read_conn
+
+    ticker = ticker.upper()
+    cfg = get_settings()
+    with read_conn(cfg) as con:
+        attached = set(attach_warehouse_views(con, cfg))
+        if "security" not in attached or "entity" not in attached:
+            return {
+                "ticker": ticker,
+                "available": False,
+                "reason": "Warehouse identity data unavailable",
+            }
+        identity = con.execute(
+            "SELECT e.cik, e.name, e.sector, s.security_id, s.currency, s.exchange "
+            "FROM entity e JOIN security s ON s.cik = e.cik WHERE s.ticker = ? LIMIT 1",
+            [ticker],
+        ).fetchone()
+        if identity is None:
+            return {"ticker": ticker, "available": False, "reason": "Ticker absent from warehouse"}
+        cik, name, sector, security_id, currency, exchange = identity
+
+        latest_filing = con.execute(
+            "SELECT accession_number, form, filed_date, period_of_report, fiscal_year, fiscal_period, primary_doc_url "
+            "FROM filing WHERE cik = ? ORDER BY filed_date DESC, accession_number DESC LIMIT 1",
+            [cik],
+        ).fetchone()
+        facts = con.execute(
+            "SELECT taxonomy, tag, unit, period_end, duration_bucket, value, filed_date, accession_number "
+            "FROM fact WHERE cik = ? ORDER BY filed_date DESC, period_end DESC LIMIT 20",
+            [cik],
+        ).fetchall()
+        prices = con.execute(
+            "SELECT date, open, high, low, close, volume, source "
+            "FROM price_daily WHERE security_id = ? ORDER BY date DESC LIMIT 250",
+            [security_id],
+        ).fetchall()
+        return {
+            "ticker": ticker,
+            "available": True,
+            "company": {
+                "cik": cik,
+                "name": name,
+                "sector": sector,
+                "currency": currency,
+                "exchange": exchange,
+                "security_id": security_id,
+            },
+            "latest_filing": None
+            if latest_filing is None
+            else {
+                "accession_number": latest_filing[0],
+                "form": latest_filing[1],
+                "filed_date": str(latest_filing[2]),
+                "period_of_report": str(latest_filing[3]) if latest_filing[3] else None,
+                "fiscal_year": latest_filing[4],
+                "fiscal_period": latest_filing[5],
+                "primary_doc_url": latest_filing[6],
+            },
+            "facts": [
+                {
+                    "taxonomy": r[0],
+                    "tag": r[1],
+                    "unit": r[2],
+                    "period_end": str(r[3]),
+                    "duration_bucket": r[4],
+                    "value": r[5],
+                    "filed_date": str(r[6]),
+                    "accession_number": r[7],
+                }
+                for r in facts
+            ],
+            "prices": [
+                {
+                    "date": str(r[0]),
+                    "open": r[1],
+                    "high": r[2],
+                    "low": r[3],
+                    "close": r[4],
+                    "volume": r[5],
+                    "source": r[6],
+                }
+                for r in reversed(prices)
+            ],
+        }
 
 
 @app.get("/api/health")
@@ -44,6 +173,23 @@ def universe() -> dict:
             for company in companies
         ],
         "sectors": sectors,
+    }
+
+
+@app.get("/api/data/status")
+def data_status() -> dict:
+    """Read-only ingestion status published by the Data Engine."""
+    from finlab.engine.status import read_status
+
+    return read_status(Path(__file__).resolve().parents[3] / ".finlab" / "ingestion")
+
+
+@app.post("/api/data/refresh")
+def data_refresh() -> dict:
+    """Refresh requests are enqueued by the Data Engine CLI, never written here."""
+    return {
+        "accepted": False,
+        "message": "Use the Data Engine command: make ingest or make prices-yahoo.",
     }
 
 

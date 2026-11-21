@@ -18,6 +18,10 @@ type Row = {
 }
 type Dashboard = { mode: string; session: { label?: string; is_open?: boolean }; refreshed_at?: string; rows: Row[] }
 
+type WarehouseStatus = { datasets: { entity: number; filing: number; security: number; fact: number; price_daily: number }; fundamental_range: [string | null, string | null]; price_range: [string | null, string | null] }
+type WarehouseAsset = { ticker: string; available: boolean; reason?: string; company?: { cik: number; name: string; sector: string; currency: string | null; exchange: string | null; security_id: string }; latest_filing?: { accession_number: string; form: string; filed_date: string } | null; facts: Array<{ taxonomy: string; tag: string; unit: string; period_end: string; duration_bucket: string; value: number; filed_date: string }>; prices: Array<{ date: string; close: number; volume: number | null; source: string | null }> }
+type DashboardWarehouseStatus = WarehouseStatus
+
 const statusLabels: Record<Row['status'], string> = {
   'Buy candidate': 'Candidate à acheter',
   Watch: 'À surveiller',
@@ -35,10 +39,36 @@ function App() {
   const [data, setData] = useState<Dashboard | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [warehouseStatus, setWarehouseStatus] = useState<DashboardWarehouseStatus | null>(null)
+  const [warehouseAsset, setWarehouseAsset] = useState<WarehouseAsset | null>(null)
 
   useEffect(() => {
     fetch('/api/universe').then((response) => response.json()).then((payload) => setCompanies(payload.companies)).catch(() => setError('Impossible de joindre le backend.'))
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const loadStatus = async () => {
+      try {
+        const response = await fetch('/api/warehouse/status')
+        if (response.ok && active) setWarehouseStatus(await response.json())
+      } catch {
+        // Status remains available at its last successful snapshot.
+      }
+    }
+    loadStatus()
+    const timer = window.setInterval(loadStatus, 5000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [])
+
+  useEffect(() => {
+    const ticker = selected[0]
+    if (!ticker) return
+    fetch(`/api/warehouse/assets/${ticker}`)
+      .then((response) => response.json())
+      .then((payload) => setWarehouseAsset(payload))
+      .catch(() => setWarehouseAsset(null))
+  }, [selected])
 
   useEffect(() => {
     let active = true
@@ -76,6 +106,7 @@ function App() {
           <button className="nav-active"><span>◫</span> Marché en direct</button>
           <button disabled><span>◫</span> Weekly brief</button>
           <button disabled><span>◫</span> Company</button>
+          <button className="nav-active"><span>◫</span> Data Center</button>
         </nav>
         <div className="watchlist-head"><span>WATCHLIST</span><b>{selected.length}</b></div>
         <div className="ticker-list">
@@ -104,6 +135,27 @@ function App() {
         </header>
 
         {mode === 'demo' && <div className="notice"><b>DÉMONSTRATION FICTIVE</b><span>Les données et prix sont simulés.</span></div>}
+        {mode === 'live' && warehouseStatus && <div className="notice"><b>DONNÉES INGÉRÉES</b><span>{warehouseStatus.datasets.fact.toLocaleString('fr-FR')} faits · {warehouseStatus.datasets.price_daily.toLocaleString('fr-FR')} prix · {warehouseStatus.datasets.filing.toLocaleString('fr-FR')} filings</span></div>}
+        {mode === 'live' && warehouseAsset?.available && <div className="data-center">
+          <div className="table-title"><h2>{warehouseAsset.company?.name}</h2><small>{warehouseAsset.ticker} · données locales</small></div>
+          <div className="step-meta" style={{ padding: '14px 18px' }}>
+            <span>{warehouseAsset.facts.length} facts récents</span>
+            <span>{warehouseAsset.prices.length} prix disponibles</span>
+            <span>{warehouseAsset.latest_filing?.form ?? 'Filing'} · {warehouseAsset.latest_filing?.filed_date ?? '—'}</span>
+            <span>{warehouseAsset.company?.sector ?? 'Secteur indisponible'}</span>
+          </div>
+        </div>}
+        <div className="data-center">
+          <div className="table-title"><h2>Data Center</h2><small>Warehouse local</small></div>
+          {warehouseStatus ? (
+            <div className="step-meta" style={{ padding: '14px 18px' }}>
+              <span>{warehouseStatus.datasets.fact.toLocaleString('fr-FR')} faits</span>
+              <span>{warehouseStatus.datasets.price_daily.toLocaleString('fr-FR')} prix</span>
+              <span>{warehouseStatus.datasets.filing.toLocaleString('fr-FR')} filings</span>
+              <span>{warehouseStatus.datasets.entity.toLocaleString('fr-FR')} entreprises</span>
+            </div>
+          ) : <div className="empty">Chargement du warehouse…</div>}
+        </div>
         {error && <div className="error">{error}</div>}
 
         <div className="metrics">
