@@ -72,6 +72,7 @@ For the Streamlit interface, use `make run` (`8501` by default). The React appli
 | `coverage` | Concept resolution report; exits non-zero below 95% |
 | `status` | Schema version, table names and row counts |
 | `ingest` `concepts` `metrics` | Pipeline stages on their own |
+| `prices-yahoo` | Merge Yahoo raw OHLCV into the warehouse (`START` and `END`, ISO dates) |
 | `clean` `clean-data` | Caches; warehouse and DB, keeping raw downloads |
 
 Override defaults inline: `make run PORT=9000`, `make metrics AS_OF=2024-01-01`.
@@ -239,7 +240,6 @@ src/finlab/
   daemon/          main · scheduler · queue · pools          (M4)
   ui/              app.py · queries.py                       (legacy)
 ```
-
 ### Schema and migrations
 
 `db/schema.sql` is the baseline a fresh install applies; `db/migrations/NNNN_*.sql`

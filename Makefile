@@ -17,7 +17,7 @@ WAREHOUSE := $(DATA_DIR)/warehouse/fact
 
 .PHONY: help setup env ingest concepts metrics run ui api web stop test lint fmt check \
         coverage status clean clean-data bootstrap universe submissions schedule \
-        daemon queue schedule-daemon
+        daemon queue schedule-daemon prices-yahoo
 
 help: ## Show the available targets
 	@echo "finlab — make targets"
@@ -45,6 +45,12 @@ env: ## Create .env from the example if it is missing
 
 ingest: ## Fetch companyfacts for the PoC universe (~50 SEC requests)
 	uv run finlab ingest poc
+
+START ?= 1996-01-01
+END ?= $(shell date +%F)
+
+prices-yahoo: ## Backfill daily raw OHLCV through Yahoo (override START/END)
+	uv run finlab ingest prices-yahoo --start $(START) --end $(END)
 
 universe: ## Capture today's universe snapshot — run this DAILY, it cannot be backfilled
 	uv run finlab ingest universe

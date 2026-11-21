@@ -129,7 +129,7 @@ def _fmt_money(value: float | None) -> str:
 
 st.sidebar.title("finlab")
 has_facts = (get_settings().warehouse_dir / "fact").is_dir()
-page = st.sidebar.radio("Page", PAGES)
+page = st.sidebar.radio("Page", PAGES, index=PAGES.index("Weekly brief") if not has_facts else 0)
 if page == "Marché en direct":
     from finlab.ui.live import render
 

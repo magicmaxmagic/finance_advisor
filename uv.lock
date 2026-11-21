@@ -647,6 +647,7 @@ dependencies = [
     { name = "tenacity" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "yfinance" },
 ]
 
 [package.optional-dependencies]
@@ -697,6 +698,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=8.2" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+    { name = "yfinance", specifier = ">=1.0" },
 ]
 provides-extras = ["text", "eval", "research", "ui"]
 

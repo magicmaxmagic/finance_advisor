@@ -33,6 +33,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "pyyaml>=6.0",
+    "yfinance>=1.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
 ]
@@ -93,6 +94,7 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-q --strict-markers"
 markers = [
     "slow: tests that hit the network or take more than a few seconds",

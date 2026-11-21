@@ -307,6 +307,48 @@ def ingest_prices_command(
         err_console.print(f"[yellow]no price series for:[/] {', '.join(report.tickers_missing)}")
 
 
+@ingest_app.command("prices-yahoo")
+def ingest_prices_yahoo_command(
+    start: Annotated[
+        str,
+        typer.Option("--start", help="First trading date, YYYY-MM-DD."),
+    ] = "1996-01-01",
+    end: Annotated[
+        str | None,
+        typer.Option("--end", help="Last trading date, YYYY-MM-DD."),
+    ] = None,
+) -> None:
+    """Backfill daily raw OHLCV for the configured PoC universe through Yahoo."""
+    from finlab.ingest.yahoo import YahooProvider
+    from finlab.ingest.yahoo_loader import load_yahoo_prices
+
+    try:
+        start_date = date.fromisoformat(start)
+        end_date = date.fromisoformat(end) if end else date.today()
+    except ValueError as exc:
+        raise _fail(f"invalid ISO date: {exc}") from exc
+
+    cfg = get_settings()
+    cfg.ensure_dirs()
+    try:
+        with write_conn(cfg) as con:
+            report = load_yahoo_prices(
+                con,
+                cfg,
+                YahooProvider(),
+                start=start_date,
+                end=end_date,
+            )
+    except WriterLockHeld as exc:
+        raise _fail(str(exc)) from exc
+
+    console.print(f"loaded {report.rows:,} retained price rows")
+    console.print(f"securities {report.securities}")
+    console.print(f"corporate actions {report.corporate_actions}")
+    if report.tickers_missing:
+        err_console.print(f"[yellow]no Yahoo series for:[/] {', '.join(report.tickers_missing)}")
+
+
 @ingest_app.command("universe")
 def ingest_universe_command(
     overwrite: Annotated[
