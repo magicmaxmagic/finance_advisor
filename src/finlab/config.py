@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Shipped in .env.example. Network code must refuse to run while this is unchanged:
@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # raise it past the limit by editing a config file.
     sec_max_rps: float = Field(default=10.0, gt=0, le=10.0)
     sec_max_concurrency: int = Field(default=8, ge=1, le=16)
+
+    # --- market data (IEX, read-only requests) ------------------------------
+    alpaca_key_id: SecretStr | None = None
+    alpaca_secret_key: SecretStr | None = None
 
     # --- Ollama Cloud --------------------------------------------------------
     ollama_base_url: str = "https://ollama.com"

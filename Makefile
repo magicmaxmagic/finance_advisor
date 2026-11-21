@@ -90,12 +90,6 @@ schedule-daemon: ## Install and start finlabd as a systemd user service
 # --- the app ----------------------------------------------------------------
 
 run: ## Launch the read-only UI on HOST:PORT
-	@if [ ! -d "$(WAREHOUSE)" ]; then \
-		echo "error: no data ingested yet ($(WAREHOUSE) is missing)."; \
-		echo "run 'make bootstrap' first — it fetches ~50 filers from the SEC."; \
-		exit 1; \
-	fi
-	@echo "finlab UI on http://$(HOST):$(PORT)  (loopback only — tunnel in over SSH)"
 	uv run finlab ui --host $(HOST) --port $(PORT)
 
 ui: run ## Alias for run

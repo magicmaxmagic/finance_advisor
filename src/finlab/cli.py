@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -409,6 +409,43 @@ def metrics_build(
     )
 
 
+@app.command("weekly")
+def weekly(
+    prices_csv: Annotated[
+        Path | None, typer.Option("--prices-csv", exists=True, dir_okay=False)
+    ] = None,
+) -> None:
+    """Generate the last completed weekly brief or show the already published edition."""
+    import httpx
+
+    from finlab.research.weekly import completed_friday
+    from finlab.research.weekly_report import generate, read_brief
+
+    cfg = get_settings()
+    week = completed_friday(datetime.now(UTC))
+    path = cfg.reports_dir / "weekly" / f"{week}.zip"
+    try:
+        if not path.is_file():
+            with write_conn(cfg):
+                path = generate(cfg, prices=prices_csv)
+    except (WriterLockHeld, ValueError, RuntimeError, httpx.HTTPError) as exc:
+        raise _fail(str(exc)) from exc
+    brief = read_brief(path)
+    console.print(f"Week ending {brief['week']} · {brief['source']}")
+    picks = [r for r in brief["rows"] if r["status"] == "Buy candidate"]
+    if not picks:
+        console.print("No buy candidate this week.")
+    for row in picks:
+        console.print(f"{row['ticker']}  USD {row['price']:.2f}")
+        for rule in row["tests"]:
+            console.print(f"  {rule['detail']}")
+        history = row["history"]
+        console.print(
+            f"  Beat SPY in {history['wins']}/{history['windows']} prior 13-week periods."
+        )
+    console.print(f"Full evidence, exclusions and sources: {path}")
+
+
 @app.command("ui")
 def ui(
     port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8501,
@@ -423,8 +460,6 @@ def ui(
     import subprocess
     import sys
 
-    from finlab.ui import app as ui_app
-
     raise typer.Exit(
         subprocess.call(
             [
@@ -432,7 +467,7 @@ def ui(
                 "-m",
                 "streamlit",
                 "run",
-                str(Path(ui_app.__file__)),
+                str(Path(__file__).parent / "ui" / "app.py"),
                 "--server.address",
                 host,
                 "--server.port",

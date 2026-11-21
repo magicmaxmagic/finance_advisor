@@ -53,6 +53,7 @@ SCHEDULE: tuple[ScheduledJob, ...] = (
     ScheduledJob("submissions", "30 7 * * *", PRIORITY_INGEST, "acceptance times"),
     ScheduledJob("rebuild_derived", "0 8 * * *", PRIORITY_DERIVE, "concept map, Q4, metrics"),
     ScheduledJob("companyfacts_refresh", "0 3 * * sun", PRIORITY_MAINTENANCE, "weekly refresh"),
+    ScheduledJob("weekly_brief", "0 12 * * sat", PRIORITY_DERIVE, "weekly equity research"),
     ScheduledJob("coverage_check", "0 4 * * sun", PRIORITY_MAINTENANCE, "concept coverage"),
 )
 
@@ -65,7 +66,12 @@ def build_scheduler(enqueue_fn: Callable[[str, int], None]) -> AsyncIOScheduler:
         scheduler.add_job(
             enqueue_fn,
             trigger=CronTrigger(
-                minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                day_of_week=day_of_week,
+                timezone="UTC" if entry.job_type == "weekly_brief" else None,
             ),
             args=[entry.job_type, entry.priority],
             id=entry.job_type,

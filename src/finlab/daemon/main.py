@@ -20,7 +20,7 @@ import asyncio
 import contextlib
 import signal
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import duckdb
@@ -142,7 +142,17 @@ def handle_coverage_check(
     return f"{len(rows) - len(failing)}/{len(rows)} concepts at or above threshold"
 
 
+def handle_weekly_brief(
+    con: duckdb.DuckDBPyConnection, settings: Settings, payload: dict[str, Any]
+) -> str:
+    from finlab.research.weekly_report import generate
+
+    day = date.fromisoformat(payload["scheduled_for"]) if "scheduled_for" in payload else None
+    return str(generate(settings, scheduled=day))
+
+
 HANDLERS: dict[str, Handler] = {
+    "weekly_brief": handle_weekly_brief,
     "universe_snapshot": handle_universe_snapshot,
     "submissions": handle_submissions,
     "rebuild_derived": handle_rebuild_derived,
@@ -243,6 +253,8 @@ class Daemon:
             scheduler = build_scheduler(self._enqueue_scheduled(con))
             for job_id in [s.job_type for s in SCHEDULE if s.job_type not in HANDLERS]:
                 scheduler.remove_job(job_id)
+            if not (self.settings.alpaca_key_id and self.settings.alpaca_secret_key):
+                scheduler.remove_job("weekly_brief")
             scheduler.start()
 
             loop = asyncio.get_running_loop()

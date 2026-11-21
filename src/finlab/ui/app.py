@@ -29,7 +29,7 @@ from finlab.ui import queries as q
 
 st.set_page_config(page_title="finlab", page_icon="📊", layout="wide")
 
-PAGES = ("Screen", "Company", "Restatement explorer")
+PAGES = ("Screen", "Company", "Restatement explorer", "Weekly brief")
 
 HISTORY_CONCEPTS = ("revenue", "gross_profit", "operating_income", "net_income")
 
@@ -127,9 +127,18 @@ def _fmt_money(value: float | None) -> str:
 
 # --- sidebar ----------------------------------------------------------------
 
-first, last = _range()
 st.sidebar.title("finlab")
-page = st.sidebar.radio("Page", PAGES)
+has_facts = (get_settings().warehouse_dir / "fact").is_dir()
+page = st.sidebar.radio("Page", PAGES, index=0 if has_facts else 3)
+if page == "Weekly brief":
+    from finlab.ui.weekly import render
+
+    render(get_settings().reports_dir / "weekly")
+    st.stop()
+if not has_facts:
+    st.info("Run make bootstrap to load filing history for this page.")
+    st.stop()
+first, last = _range()
 
 st.sidebar.divider()
 as_of = st.sidebar.slider(

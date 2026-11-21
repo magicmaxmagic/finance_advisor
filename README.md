@@ -15,6 +15,38 @@ Working agreements for contributors, human or agent: [`CLAUDE.md`](CLAUDE.md)
 
 ---
 
+## Weekly investment brief
+
+Open the [offline example](examples/weekly-brief.html) in a browser to inspect a fictional edition. To generate a live edition, run the screen once and open **Weekly brief** in the dashboard.
+
+```bash
+make env
+# In .env, set FINLAB_SEC_USER_AGENT to a real contact address.
+# Set FINLAB_ALPACA_KEY_ID and FINLAB_ALPACA_SECRET_KEY for the free IEX feed.
+uv sync --all-extras
+uv run finlab weekly
+make run
+```
+
+The screen covers the 54 US filers in the project's fixed universe. After the US trading week ends, it compares each company with SPY and identifies candidates for a 3–12 month research horizon. A week can have zero candidates. Each company shows its outcome, inputs, filing links and dated price history.
+
+| A company must pass all four rules | Calculation |
+|---|---|
+| Annual earnings yield ≥ 4% | Latest reported fiscal-year diluted EPS in USD divided by the raw USD closing price |
+| Annual sales growth > 0 | Latest annual revenue divided by comparable prior-year revenue, minus one |
+| Positive relative momentum | Stock adjusted return from 52 to 4 weeks ago minus SPY’s return on the same dates |
+| Maximum decline within 35% | Worst peak-to-trough decline between the last 53 weekly adjusted closes |
+
+Qualifying names are ranked by earnings yield, then relative momentum. The maximum price compatible with the yield hurdle is diluted EPS divided by 0.04. The thresholds are research assumptions. The page shows median, worst and frequency of outperformance in up to twenty disjoint historical 13-week periods. These descriptive statistics cover all observed periods and do not measure the decision rule’s predictive accuracy. Fixed-universe selection, IEX-only pricing, annual accounting, cyclical earnings and USD/CAD exposure matter when interpreting a result.
+
+**Data and timing.** The brief refreshes SEC Company Facts through the existing rate-limited client, resolves annual USD observations with the project's point-in-time macro and compares matching stock and SPY sessions. Annual figures older than 460 days, ambiguous split basis and incomplete weekly prices cannot qualify. The cutoff is Friday end-of-day New York, available Saturday. A delayed run can include vendor corrections made after Friday. The archive records its actual generation time. The writer publishes one immutable ZIP per week under `data/reports/weekly/`, containing the report, dated SEC citations and the daily prices used. Opening the UI runs no downloads.
+
+**Weekly operation.** With both Alpaca keys set, the existing `finlabd` scheduler enqueues the report Saturdays at **12:00 UTC**. On first setup run `uv run finlab db init`, then `make daemon` on the host that should generate editions. A run that misses the trigger can be recovered with `uv run finlab weekly` after stopping the daemon to release the writer lock. The command prints the latest completed edition and reuses an existing edition on retry.
+
+**Alternative price input.** Supply `uv run finlab weekly --prices-csv path/to/daily.csv`. Include one row per ticker and trading session with the columns `ticker,date,raw_close,split_close,adjusted_close`. Prices must be positive daily USD closes from the same provider and currency basis. Use raw prices, split-only adjusted prices and fully adjusted prices respectively. Include SPY, the desired members of the fixed universe, and preferably five years of history. SEC contact details are still required. CSV import is an on-demand path.
+
+[Alpaca historical bars](https://docs.alpaca.markets/us/reference/stockbars) · [SEC Company Facts](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) · [Momentum construction in Ken French’s Data Library](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/Data_Library/det_10_port_form_pr_12_2.html)
+
 ## Quick start
 
 ```bash
@@ -37,9 +69,7 @@ make run         # read-only UI on http://127.0.0.1:8501
 
 Override defaults inline: `make run PORT=9000`, `make metrics AS_OF=2024-01-01`.
 
-`make run` deliberately does **not** ingest. Launching a UI should never quietly
-fire fifty requests at the SEC, so it checks the warehouse exists and points you
-at `make bootstrap` if it doesn't.
+`make run` opens the read-only dashboard. A fresh checkout opens Weekly brief and shows how to generate the first edition. The other pages use the bootstrapped warehouse.
 
 > **Before ingesting:** set `FINLAB_SEC_USER_AGENT` in `.env` to a real contact
 > address. The SEC blocks anonymous traffic, and `SecClient` refuses to start
