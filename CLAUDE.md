@@ -15,7 +15,7 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 
 2. **Single DuckDB writer.** Exactly one process (`finlabd`) holds the
    read-write connection to `data/db/finlab.duckdb`. Every other consumer —
-   Streamlit, FastAPI, React/Vite, notebooks, and CLI read commands — opens an
+   FastAPI, React/Vite, notebooks, and CLI read commands — opens an
    in-memory DuckDB or reads the Parquet warehouse. Never open a second
    read-write connection.
 
@@ -48,7 +48,6 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 - numpy, scipy, statsmodels, quantstats
 - MLflow OSS (file backend) for extraction evals
 - FastAPI for the read-only HTTP API
-- Streamlit for the legacy read-only UI
 - React 19 + TypeScript + Vite for the web frontend
 - typer for CLI
 - ruff, pytest, pre-commit
@@ -57,7 +56,7 @@ Full design: `docs/architecture.md`. Read it before any non-trivial change.
 
 **`uv sync --all-extras` is the development and CI setup.** Use it. A bare
 `uv sync` installs only the core dependencies and will leave M5 (`pydantic-ai`,
-`mlflow`), M7 (`statsmodels`, `quantstats`) and the UI (`streamlit`) missing.
+`mlflow`), M7 (`statsmodels`, `quantstats`) and the React/Frontend UI missing.
 
 The extras exist so the base install stays small, not so parts of the stack are
 optional: `text`, `eval`, `research`, `ui`. Everything in the stack list above

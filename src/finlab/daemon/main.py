@@ -142,6 +142,27 @@ def handle_coverage_check(
     return f"{len(rows) - len(failing)}/{len(rows)} concepts at or above threshold"
 
 
+def handle_prices_yahoo(
+    con: duckdb.DuckDBPyConnection, settings: Settings, payload: dict[str, Any]
+) -> str:
+    from finlab.ingest.yahoo import YahooProvider
+    from finlab.ingest.yahoo_loader import load_yahoo_prices
+
+    end = date.today()
+    start = end - timedelta(days=10)
+    report = load_yahoo_prices(
+        con,
+        settings,
+        YahooProvider(timeout=30.0),
+        start=start,
+        end=end,
+    )
+    return (
+        f"Yahoo refresh {start.isoformat()} to {end.isoformat()}: "
+        f"{report.rows} retained rows, {report.corporate_actions} actions"
+    )
+
+
 def handle_weekly_brief(
     con: duckdb.DuckDBPyConnection, settings: Settings, payload: dict[str, Any]
 ) -> str:
@@ -153,6 +174,7 @@ def handle_weekly_brief(
 
 HANDLERS: dict[str, Handler] = {
     "weekly_brief": handle_weekly_brief,
+    "prices": handle_prices_yahoo,
     "universe_snapshot": handle_universe_snapshot,
     "submissions": handle_submissions,
     "rebuild_derived": handle_rebuild_derived,

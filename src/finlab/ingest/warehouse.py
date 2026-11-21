@@ -134,7 +134,7 @@ def publish_table(
     """Snapshot a small native table into the warehouse as one Parquet file.
 
     `entity`, `filing` and the other small tables live inside the DuckDB file,
-    which only the writer may open. Readers — Streamlit, notebooks, CLI read
+    which only the writer may open. Readers — Analytics, notebooks, CLI read
     commands — are forbidden from touching it (CLAUDE.md invariant 2) and would
     otherwise be unable to resolve a CIK to a company name. Publishing a
     read-model snapshot alongside the big partitioned datasets keeps the read

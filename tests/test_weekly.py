@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from streamlit.testing.v1 import AppTest
 
 from finlab.daemon.main import HANDLERS
 from finlab.daemon.scheduler import build_scheduler
@@ -18,13 +17,11 @@ from finlab.ingest.universe import Company
 from finlab.ingest.weekly_prices import download, read_csv
 from finlab.research import weekly_report
 from finlab.research.weekly import Bar, Filing, completed_friday, screen
-from finlab.research.weekly_example import example_brief
 from finlab.research.weekly_report import archive_report, read_brief
 
 WEEK = date(2026, 11, 20)
 FILER = Company(1, "AAA", "Industrials", "Alpha")
 FY = date(2025, 12, 31)
-APP = Path(__file__).resolve().parents[1] / "src/finlab/ui/app.py"
 
 
 @pytest.fixture
@@ -188,28 +185,6 @@ def test_weekly_pipeline_with_sec_wire_format(settings, monkeypatch, tmp_path, i
     assert brief["sec_document_hashes"]["AAA"] == "fixture"
     assert weekly_report.generate(settings) == result
     assert "future" not in json.dumps(brief)
-
-
-def test_weekly_ui_from_blank_checkout(settings, monkeypatch):
-    monkeypatch.setenv("FINLAB_DATA_DIR", str(settings.data_dir))
-    app = AppTest.from_file(str(APP), default_timeout=30).run()
-    assert not app.exception and app.sidebar.radio[0].value == "Weekly brief"
-    app.toggle[0].set_value(True).run()
-    assert not app.exception
-    assert any("First to research" in h.value for h in app.subheader)
-    app.selectbox[0].set_value("EXAMPLE-B").run()
-    assert not app.exception
-    assert any("Watch" in h.value for h in app.subheader)
-
-
-def test_archived_ui_selects_real_edition(settings, monkeypatch):
-    monkeypatch.setenv("FINLAB_DATA_DIR", str(settings.data_dir))
-    data = example_brief()
-    archive_report(settings.reports_dir / "weekly", data, {})
-    app = AppTest.from_file(str(APP), default_timeout=30).run()
-    assert not app.exception
-    assert app.selectbox[0].value.stem == data["week"]
-    assert app.get("download_button")
 
 
 def test_thursday_quote_only_accepted_on_actual_friday_holiday():

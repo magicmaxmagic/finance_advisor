@@ -10,10 +10,7 @@ dependencies = [
     # warehouse
     "duckdb>=1.1,<2",
     "polars>=1.0",
-    # Capped below 25: pyarrow 25.0.0 segfaults converting a pandas DataFrame to
-    # Arrow on Streamlit's script thread, which kills the UI on the second
-    # rerun (any slider move). Reproducible with a five-line Streamlit app and
-    # no finlab code at all; 24.0.0 and 21.0.0 are clean. Re-test before lifting.
+    # Arrow conversion compatibility is pinned while the React/FastAPI stack is stabilized.
     "pyarrow>=16.0,<25",
     # http / retry
     "httpx>=0.27",
@@ -45,12 +42,12 @@ text = ["pydantic-ai>=0.0.14"]
 eval = ["mlflow>=2.14"]
 # Backtest statistics and tearsheets — M7 onward.
 research = ["statsmodels>=0.14", "quantstats>=0.0.62"]
-# Read-only UI.
-ui = ["streamlit>=1.36"]
 
 [project.scripts]
 finlab = "finlab.cli:app"
 finlabd = "finlab.daemon.main:main"
+finlab-engine = "finlab.engine.cli:app"
+finlab-analytics = "finlab.analytics.cli:app"
 
 [dependency-groups]
 dev = [

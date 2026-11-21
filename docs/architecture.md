@@ -52,9 +52,9 @@
 | L5 Output | `report`, `claim`, `backtest_run`, `backtest_metric` | partial |
 | Presentation | FastAPI read-only routes and React/Vite market workstation | no |
 
-L1–L3 can run over the entire universe every day for free. L4 is the only layer that spends quota. Presentation clients never open the write DuckDB connection: FastAPI and Streamlit use read-only/in-memory readers, and React communicates only with HTTP routes.
+L1–L3 can run over the entire universe every day for free. L4 is the only layer that spends quota. Presentation clients never open the write DuckDB connection: FastAPI Analytics uses read-only/in-memory readers, and React communicates only with HTTP routes.
 
-FastAPI routes are implemented in `src/finlab/api/app.py`: `GET /api/health`, `GET /api/universe`, and `GET /api/market/live`. The React 19/TypeScript/Vite source lives in `frontend/` and proxies `/api/*` to FastAPI during development. The legacy Streamlit UI remains available through `make run`; the React application is launched through `make app` or `make web`.
+FastAPI routes are implemented in `src/finlab/api/app.py`: `GET /api/health`, `GET /api/universe`, and `GET /api/market/live`. The React 19/TypeScript/Vite source lives in `frontend/` and proxies `/api/*` to FastAPI during development. The React application is launched through `make app` or `make web`.
 
 ---
 
@@ -472,7 +472,18 @@ State machine: `pending → running → done | failed | deadletter`. Retry with 
 
 - FastAPI listens on `127.0.0.1:8000` and exposes `/api/health`, `/api/universe`, and `/api/market/live`.
 - Vite listens on `127.0.0.1:5173` and proxies `/api/*` to FastAPI.
-- Streamlit remains on `127.0.0.1:8501` by default as the legacy UI.
+- Streamlit is retired and is not an application entry point.
 - `make app` starts FastAPI and Vite together; `make api` and `make web` start them independently.
 
 These processes do not open `finlab.duckdb` read-write. They follow the in-memory reader or Parquet paths defined above.
+
+---
+
+## 9. Data Engine / Analytics split
+
+| Data Engine | SEC/market ingestion, queue, writer, warehouse and snapshot publication | no |
+| Analytics | Read-only PIT/metrics/factors/backtests/reports and React/FastAPI presentation | no |
+
+The Data Engine owns `write_conn()`, provider adapters, raw caches, staging, Parquet publication and the OS writer lock. Analytics owns read-only/in-memory DuckDB access and must not import SEC, Alpaca, Stooq or Yahoo adapters.
+
+A published warehouse epoch is represented by `data/warehouse/snapshots/{epoch}.json` plus `latest.json`. The contract includes `contract_version`, `schema_version`, publication time, required dataset presence and per-dataset checksums. Analytics validates this manifest before consuming a snapshot.

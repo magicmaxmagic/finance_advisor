@@ -7,7 +7,7 @@ in-memory database.
 Three entry points, in order of how often you should reach for them:
 
 - `read_conn()`      in-memory DuckDB with views over the Parquet warehouse.
-                     The default for notebooks, Streamlit and CLI read commands.
+                     The default for notebooks, Analytics and CLI read commands.
 - `write_conn()`     the single writer, guarded by an OS-level advisory lock so
                      a second one fails loudly instead of corrupting anything.
 - `open_db_read_only()`  reads the DuckDB file itself. Administrative use only
@@ -149,7 +149,7 @@ def new_read_conn(
 ) -> duckdb.DuckDBPyConnection:
     """An open in-memory database over the Parquet warehouse. Caller closes it.
 
-    Long-lived readers — the Streamlit app holds one across reruns — need a
+    Long-lived readers — such as Analytics services — need a
     connection they own rather than a context manager.
     """
     cfg = settings or get_settings()

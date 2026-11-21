@@ -182,6 +182,29 @@ GROUP BY cik, canonical, fy_start, fy_end, fy_filed, fy_accession
 HAVING count(*) = 3
 """
 
+SHARES_ASOF_SQL = """
+CREATE OR REPLACE MACRO shares_outstanding_asof(as_of) AS TABLE
+  SELECT cik, last(value ORDER BY period_end) AS shares_outstanding
+  FROM fact
+  WHERE taxonomy = 'dei'
+    AND tag = 'EntityCommonStockSharesOutstanding'
+    AND filed_date <= as_of
+  GROUP BY cik
+"""
+
+RESTATEMENT_ASOF_SQL = """
+CREATE OR REPLACE MACRO restatement_vintages_asof(cik_value, as_of) AS TABLE
+  SELECT f.filed_date, f.accession_number, coalesce(fl.form, '?') AS form,
+         cm.canonical, f.period_end, f.duration_bucket, f.tag,
+         f.value * cm.sign AS value, cm.priority
+  FROM fact f
+  JOIN concept_map cm
+    ON cm.taxonomy = f.taxonomy AND cm.tag = f.tag
+   AND f.filed_date BETWEEN cm.valid_from AND cm.valid_to
+  LEFT JOIN filing fl ON fl.accession_number = f.accession_number
+  WHERE f.cik = cik_value AND f.filed_date <= as_of
+"""
+
 
 def _relation_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:
     try:
@@ -205,9 +228,15 @@ def install_macros(con: duckdb.DuckDBPyConnection) -> tuple[str, ...]:
     con.execute(FUNDAMENTALS_ASOF_SQL)
     con.execute(FUNDAMENTALS_COMPLETE_ASOF_SQL)
     installed = ["fundamentals_asof", "fundamentals_complete_asof"]
+    if _relation_exists(con, "filing"):
+        con.execute(RESTATEMENT_ASOF_SQL)
+        installed.append("restatement_vintages_asof")
     if _relation_exists(con, "fundamentals_q4"):
         con.execute(QUARTERLY_ASOF_SQL)
         installed.append("quarterly_asof")
+    if _relation_exists(con, "fact"):
+        con.execute(SHARES_ASOF_SQL)
+        installed.append("shares_outstanding_asof")
     return tuple(installed)
 
 

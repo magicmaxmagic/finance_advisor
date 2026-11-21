@@ -74,9 +74,12 @@ def _run_reader(settings: Settings, body: str) -> subprocess.CompletedProcess[st
         [
             "from datetime import date",
             "from finlab.config import Settings",
-            "from finlab.ui.queries import open_reader",
+            "from finlab.db.conn import read_conn",
+            "from finlab.core.pit import install_macros",
             f'settings = Settings(data_dir=r"{settings.data_dir}", _env_file=None)',
-            "con = open_reader(settings)",
+            "cm = read_conn(settings)",
+            "con = cm.__enter__()",
+            "install_macros(con)",
             textwrap.dedent(body).strip(),
         ]
     )
@@ -147,9 +150,12 @@ def test_the_reader_never_opens_the_database_file(warehouse: Settings) -> None:
 
 def test_as_of_selects_the_vintage_that_was_public(warehouse: Settings) -> None:
     """The slider's whole purpose, exercised through the app's query layer."""
-    from finlab.ui.queries import open_reader
+    from finlab.core.pit import install_macros
+    from finlab.db.conn import read_conn
 
-    con = open_reader(warehouse)
+    cm = read_conn(warehouse)
+    con = cm.__enter__()
+    install_macros(con)
     try:
         before = con.execute(
             "SELECT value FROM fundamentals_asof(?) WHERE canonical = 'revenue' "
@@ -162,31 +168,33 @@ def test_as_of_selects_the_vintage_that_was_public(warehouse: Settings) -> None:
             [date(2026, 1, 1)],
         ).fetchone()
     finally:
-        con.close()
+        cm.__exit__(None, None, None)
 
     assert before[0] == 100.0, "as-of before the restatement must show the original"
     assert after[0] == 175.0, "as-of after the restatement must show the revision"
 
 
 def test_restatement_history_does_not_mix_reporting_windows(warehouse: Settings) -> None:
-    """A 10-K tags the same concept over the year and the closing quarter.
+    """Annual and quarterly reporting windows remain separate."""
+    from finlab.core.pit import install_macros
+    from finlab.db.conn import read_conn
 
-    Reading them as one series invents a restatement that never happened — the
-    figure appears to swing between the annual and quarterly value on the same
-    filing date.
-    """
-    from finlab.ui.queries import open_reader, restatement_history
-
-    con = open_reader(warehouse)
+    cm = read_conn(warehouse)
+    con = cm.__enter__()
+    install_macros(con)
     try:
-        annual = restatement_history(
-            con, 320193, "revenue", date(2024, 9, 28), date(2026, 1, 1), "annual"
-        )
-        quarterly = restatement_history(
-            con, 320193, "revenue", date(2024, 9, 28), date(2026, 1, 1), "quarter"
-        )
+        annual = con.execute(
+            "SELECT value FROM restatement_vintages_asof(320193, DATE '2026-01-01') "
+            "WHERE canonical = 'revenue' AND period_end = DATE '2024-09-28' "
+            "AND duration_bucket = 'annual' ORDER BY filed_date"
+        ).fetchall()
+        quarterly = con.execute(
+            "SELECT value FROM restatement_vintages_asof(320193, DATE '2026-01-01') "
+            "WHERE canonical = 'revenue' AND period_end = DATE '2024-09-28' "
+            "AND duration_bucket = 'quarter'"
+        ).fetchall()
     finally:
-        con.close()
+        cm.__exit__(None, None, None)
 
-    assert annual["value"].to_list() == [100.0, 175.0]
-    assert quarterly["value"].to_list() == [40.0]
+    assert [row[0] for row in annual] == [100.0, 175.0]
+    assert [row[0] for row in quarterly] == [40.0]

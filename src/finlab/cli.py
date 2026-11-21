@@ -499,38 +499,5 @@ def api(
     uvicorn.run("finlab.api.app:app", host=host, port=port, reload=False)
 
 
-@app.command("ui")
-def ui(
-    port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8501,
-    host: Annotated[
-        str, typer.Option("--host", help="Interface to bind. Loopback by default.")
-    ] = "127.0.0.1",
-) -> None:
-    """Launch the read-only Streamlit app.
-
-    Bound to loopback: reach it over an SSH tunnel rather than exposing it.
-    """
-    import subprocess
-    import sys
-
-    raise typer.Exit(
-        subprocess.call(
-            [
-                sys.executable,
-                "-m",
-                "streamlit",
-                "run",
-                str(Path(__file__).parent / "ui" / "app.py"),
-                "--server.address",
-                host,
-                "--server.port",
-                str(port),
-                "--server.headless",
-                "true",
-            ]
-        )
-    )
-
-
 if __name__ == "__main__":
     app()
