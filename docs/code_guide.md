@@ -44,6 +44,7 @@ the engine side. The working warehouse is separate from published epochs.
 | `analytics/snapshot.py`, `analytics/status.py`, `analytics/quality.py` | Validate and pin publication, resolve latest available research date, report gaps. |
 | `analytics/company.py`, `analytics/fundamentals.py`, `analytics/factors.py` | Historical company observations, split-aligned reported share basis, annual and explicit TTM ratios, price factors and risk. |
 | `analytics/assessment.py`, `analytics/discovery.py` | V2 group evidence, percentile normalization, comparison history, contributor breakdowns and compact cohort output for the dashboard. |
+| `analytics/financial_context.py` | Prior-only metric distributions, current peer cohorts, SPY regime, cutoff-aware event timeline, and retrospective factor evidence. |
 | `analytics/rankings.py`, `analytics/scoring.py` | Separate five-family legacy ranking and robust cross-sectional normalization. |
 | `analytics/recommendations.py`, `analytics/evaluation.py`, `analytics/research_context.py`, `analytics/provenance.py` | Archived research, matched forward observations, benchmark regime, comparable changes, runtime fingerprints and source bundles. |
 | `analytics/portfolio.py`, `analytics/portfolio_service.py` | CSV, FIFO ledger, splits, explicit FX, quote valuation and current-weight risk estimates. |
@@ -80,7 +81,7 @@ With Analytics running, interactive schemas are available at
 | `GET /api/warehouse/status`, `GET /api/warehouse/quality` | Epoch, publication date, coverage and session gaps. |
 | `GET /api/warehouse/assets/{ticker}` | Identity, recent prices, filing and canonical facts. Optional `as_of`. |
 | `GET /api/warehouse/history/{security_id}` | Up to 10,000 closes and volume observations plus benchmark data through required `as_of`. |
-| `GET /api/analytics/discovery`, `GET /api/analytics/factors/{identity}` | V2 cohort summaries and detailed company assessment. Optional `as_of`. |
+| `GET /api/analytics/discovery`, `GET /api/analytics/factors/{identity}` | V2 cohort summaries and detailed company assessment with [versioned financial context](financial_context_v5.md). Optional `as_of`. |
 | `GET /api/analytics/rankings`, `GET /api/analytics/recommendations` | Separate legacy ranking and research evidence. Optional `as_of`. |
 | `GET /api/analytics/model-validation` | Archived summary and dynamic evidence interpretation, preferring V3. |
 | `GET /api/analytics/model-validation/series` | Archived IC windows and aligned strategy and SPY curves for one horizon and series. |

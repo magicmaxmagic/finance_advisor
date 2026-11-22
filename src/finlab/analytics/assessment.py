@@ -57,6 +57,21 @@ COMPARISONS = (
     "trailing_pe",
     "ttm_pe",
     "ev_to_operating_ebitda",
+    "ev_to_revenue",
+    "price_to_book",
+    "earnings_yield",
+    "roe",
+    "roic",
+    "operating_margin",
+    "ebitda_margin",
+    "fcf_margin",
+    "earnings_growth",
+    "fcf_growth",
+    "growth_acceleration",
+    "current_ratio",
+    "interest_coverage",
+    "net_debt_to_ebitda",
+    "debt_to_equity",
     "price_to_fcf",
     "fcf_yield",
     "roa",
@@ -332,6 +347,9 @@ def company_assessment(identity: str, as_of: date, *, weights=None, comparisons=
             "captured_membership" if captured else "current_seed_survivorship_bias"
         )
         row["comparisons"] = historical_comparisons(con, row, as_of) if comparisons else {}
+        from finlab.analytics.financial_context import financial_context
+
+        row["financial_context"] = financial_context(con, row, as_of, cohort)
         row["correlation_diagnostics"] = redundancy_diagnostics(cohort, row["financial_issuer"])
         row["published_at"] = con.execute(
             "SELECT published_at FROM _warehouse_publication"

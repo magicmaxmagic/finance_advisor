@@ -7,7 +7,7 @@ deterministic research through FastAPI and React. The reporting and backtest led
 live outside the financial database.
 
 [Source code guide](code_guide.md) · [Scoring V2](scoring_v2.md) ·
-[Research methodology and results](validation_v3.md) · [Frontend architecture](../frontend/README.md) · [V4 product guide](product_v4.md)
+[Research methodology and results](validation_v3.md) · [Frontend architecture](../frontend/README.md) · [V4 product guide](product_v4.md) · [V5 financial context](financial_context_v5.md)
 
 ## Running system
 
@@ -38,7 +38,9 @@ flowchart LR
         API["FastAPI"]
         UI["React and Vite"]
         LAB["Validation, portfolio and strategies"]
+        CTX["Company history, peers, and event context"]
         R --> F --> API --> UI
+        R --> CTX --> API
         F --> LAB
     end
     SEC --> I
@@ -51,6 +53,7 @@ flowchart LR
     API -. refresh request .-> CTRL
     CTRL --> Q
     LAB --> REPORTS["JSON archives and SQLite trial ledger"]
+    REPORTS -. archived evidence through cutoff .-> CTX
 ```
 
 | Area | Running responsibilities |

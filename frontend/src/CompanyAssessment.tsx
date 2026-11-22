@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FinancialChart } from './DeferredChart'
+import { pct } from './format'
 
 type Contribution = {
   metric: string
@@ -43,6 +44,14 @@ export type Assessment = {
   reported_share_market_cap?: number | null
   market_cap_inputs?: Record<string, string | number> | null
   comparisons: Record<string, Comparison>
+  financial_context?: {
+    history: Record<string,{ observations:number; minimum:number|null; maximum:number|null; median_relation:string; recent_change:number|null; recent_four_minus_earlier_four:number|null }>
+    market: { status:string; benchmark?:string; trend?:string; price_return_12m?:number; realized_volatility_60?:number; drawdown_from_252_session_high?:number; observation_date?:string }
+    peers: { status:string; comparisons:Record<string,{ cohort:string; label:string; count:number; median:number; percentile:number }> }
+    predictive_evidence: { status:string; end?:string; factors:Record<string,{ ic:number|null; interval:number[]|null; observations:number|null; holm_p:number|null }> }
+    events: { kind:string; label:string; source:string|null; event_date:string; timing:string; publication_timestamp:string|null; evidence?:string|null; source_url?:string|null; split_factor?:number|null; amount_per_share?:number|null; limitation:string }[]
+    limitations:string[]
+  }
   fundamental_factors: {
     annual_period: string | null
     factors: Record<string, { value: number | null; status: string; definition: string }>
@@ -109,7 +118,7 @@ function formatIndicator(key: string, value: number | null) {
   return number(value)
 }
 
-const views = ['Valuation', 'Business quality', 'Technical', 'Risks', 'Score breakdown'] as const
+const views = ['Valuation', 'Business quality', 'Technical', 'Risks', 'Score breakdown', 'Market & events'] as const
 type View = typeof views[number]
 type Metric = { value: number | null; status: string; definition: string; date: string | null; source: string }
 const marketRisk = ['annualized_volatility','max_drawdown','downside_volatility','beta','var_95','cvar_95','sharpe','sortino']
@@ -138,6 +147,7 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
   const [quant, setQuant] = useState(false)
   const [selected, select] = useState<string | null>(null)
   const [all, setAll] = useState(false)
+  const [allEvents, setAllEvents] = useState(false)
   const [history, setHistory] = useState('revenue')
   const dialog = useRef<HTMLDialogElement>(null)
   const { assessment: score, comparisons, fundamental_factors: facts } = data
@@ -158,6 +168,10 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
     ? (selected.startsWith('ttm_') ? (facts.ttm_quarter_evidence ?? []) : facts.filing_evidence)
       .filter(row => (dependencies[selected] ?? [selected]).includes(row.canonical))
     : []
+  const context = data.financial_context
+  const historical = selected ? context?.history[selected] : undefined
+  const peer = selected ? context?.peers.comparisons[selected] : undefined
+  const evidence = selected ? context?.predictive_evidence.factors[selected] : undefined
   const contribution = score.contributions.filter(item => item.metric === selected)
 
   useEffect(() => {
@@ -191,7 +205,25 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
     {view === 'Risks' && <div className="v4-context"><strong>Financial risk, market risk and uncertainty</strong>
       <p>Financial risk reflects the issuer’s balance sheet and interest coverage. Market risk reflects observed price movements.
         Missing inputs can leave resilience unavailable. Historical model evidence is separate from these measures.</p></div>}
-    {view === 'Score breakdown' ? <div className="v4-score-groups">
+    {view === 'Market & events' ? <div className="v4-context">
+      <h3>U.S. equity market context</h3>
+      {context?.market.status === 'available' ? <p>SPY {context.market.trend} · 12-month price return {pct(context.market.price_return_12m)}
+        {' '}· 60-session annualized volatility {pct(context.market.realized_volatility_60)}
+        {' '}· Distance from 252-session high {pct(context.market.drawdown_from_252_session_high)} · {context.market.observation_date}.</p>
+        : <p>Comparable market observations are unavailable at this cutoff.</p>}
+      <p>Release-vintage macro data and timestamped sentiment are unavailable in the local publication.</p>
+      <h3>Recorded company events</h3>
+      {context?.events.length ? <><ul>{context.events.slice(0, allEvents ? undefined : 5).map((event,index) => <li key={`${event.event_date}-${index}`}>
+        <strong>{event.label}</strong> · {event.event_date} · {event.source ?? 'Source missing'} · {event.timing.replaceAll('_',' ')}
+        {event.split_factor != null && <span> · {number(event.split_factor)}-for-1 split factor</span>}
+        {event.publication_timestamp && <span> · {event.publication_timestamp}</span>}
+        {event.source_url?.startsWith('https://www.sec.gov/') && <> · <a href={event.source_url} target="_blank" rel="noreferrer">SEC filing</a></>}
+        {quant && <p>{event.evidence ? `${event.evidence} · ` : ''}{event.limitation}</p>}
+      </li>)}</ul>{context.events.length > 5 && <button className="text-button" type="button" aria-expanded={allEvents}
+        onClick={() => setAllEvents(!allEvents)}>{allEvents ? 'Show latest five events' : `Show all ${context.events.length} events`}</button>}</>
+        : <p>No supported filing or corporate-action records were published for this company at the cutoff.</p>}
+      {quant && context?.limitations.map(item => <p key={item}>{item}</p>)}
+    </div> : view === 'Score breakdown' ? <div className="v4-score-groups">
       {Object.entries(dimensionValues).map(([dimension,value]) => <article className="v4-score-group" key={dimension}>
         <h3>{label(dimension)} <span>{number(value)}{value != null && ' / 100'}</span></h3>
         <p>{number(score.weights[dimension] * 100)}% combined score weight</p>
@@ -235,12 +267,26 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
           {comparison && <><dt>Historical median</dt><dd>{valued(selected, comparison.historical_median)}</dd>
           <dt>Historical percentile</dt><dd>{number(comparison.historical_percentile)} · {comparison.historical_count} observations</dd>
           <dt>Historical peers</dt><dd>{comparison.valid_peer_count ? `${comparison.valid_peer_count} valid peers` : 'Comparable historical peer data unavailable'}</dd></>}
+          {historical && historical.observations > 0 && <><dt>Observed range</dt><dd>{valued(selected,historical.minimum)} to {valued(selected,historical.maximum)}</dd></>}
+          {peer && <><dt>Current {peer.cohort} peers</dt><dd>{peer.label} · {peer.count} peers · median {valued(selected,peer.median)}
+            {' '}· percentile {number(peer.percentile)}. Uses current published classifications.</dd></>}
         </dl>
+        {historical && ['above', 'at', 'below'].includes(historical.median_relation) &&
+          <p>The current value is {historical.median_relation} its own sampled median.
+            {historical.recent_four_minus_earlier_four != null && historical.recent_four_minus_earlier_four !== 0 &&
+              ` The median of its four most recent comparisons was ${historical.recent_four_minus_earlier_four > 0 ? 'higher' : 'lower'} than the median of the preceding four.`}</p>}
         {contribution.length ? contribution.map(entry => <div className="v4-context" key={entry.group}>
           <strong>{label(entry.group)} · {number(entry.score)}/100</strong>
           <p>{entry.points_from_neutral >= 0 ? '+' : ''}{number(entry.points_from_neutral)} points relative to the 50 midpoint.
             {quant && ` Final weight ${number(entry.weight*100)}%. Cohort median ${valued(selected,entry.cohort_median)}. Sample ${entry.cohort_count}. Direction ${entry.direction}.`}</p>
         </div>) : <p>This metric supplied no direct contribution to the combined score at this cutoff.</p>}
+        {evidence ? <div className="v4-context"><strong>Archived historical research</strong>
+          <p>21-session study through {context?.predictive_evidence.end} · Rank IC {number(evidence.ic)} · {evidence.observations ?? 0} windows
+            {' '}· 95% interval {evidence.interval?.map(value => number(value)).join(' to ') ?? 'unavailable'}. Retrospective aggregate across companies.</p>
+          {quant && <p>Holm-adjusted p-value {number(evidence.holm_p)}. Archived evidence is separate from the company score.</p>}
+        </div> : <p>{context?.predictive_evidence.status === 'outcomes_after_assessment'
+          ? 'The archived study includes outcomes after this cutoff, so its results are withheld here.'
+          : 'Direct historical validation evidence is unavailable for this metric.'}</p>}
         <div className="segments"><button type="button" aria-pressed={!quant} onClick={() => setQuant(false)}>Simple</button>
           <button type="button" aria-pressed={quant} onClick={() => setQuant(true)}>Quant</button></div>
         {quant && <><h3>Formula and provenance</h3><p>{active.definition}</p>

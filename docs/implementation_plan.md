@@ -4,6 +4,39 @@ Continue the existing application; each increment must leave existing tests,
 Ruff checks and frontend build green. Use deterministic fixtures for core tests.
 Do not expose strategy results before correctness gates pass.
 
+## Current track — V5 quantitative evidence and financial context
+
+V5 extends the V4 research experience and preserves the production scoring
+version and configurable 60/25/15 defaults. V3's local research archive remains
+the baseline. [V5 context and verification](financial_context_v5.md) describes
+the first increment. [V3 methodology](validation_v3.md) documents the existing
+point-in-time research protocol. V5 extensions require separately versioned
+trials and artifacts.
+
+| Phase | Work and acceptance gate | State |
+|---|---|---|
+| 1 | Reuse scoring formulas and V3 research. Record comparable baselines, coverage, dataset identifiers, and known survivorship and revision risks. | Baseline recorded in [V2 scoring](scoring_v2.md) and [V3 results](validation_v3.md) |
+| 2 | Add prior-only distributions and peer context. Enforce comparable accounting, minimum distinct-issuer counts and dated classifications for historical peers. | Sampled fundamental history and current peers shipped. Dated classifications and broader historical coverage remain open. |
+| 3 | Extend the prespecified factor registry across valuation, quality, growth, technical and risk at 21/63/126/252 sessions. Report matched coverage, bucket returns, temporal stability, regime and valid sector results, effective sample size and dependence-aware intervals. | V3's tested factor subset available. Expanded registry and new research runs remain open. |
+| 4 | Add value-, quality- and growth-only ablations to the existing dimension pairs, full score, legacy and baselines. Diagnose redundancy on matched samples. Evaluate entry filters and risk constraints as distinct experiments. | Existing V3 dimension and paired comparisons available. New ablations remain open. |
+| 5 | Freeze model selection and a chronological final test boundary. Verify label maturation, purging, embargoes, and next-open execution with independent fixtures. Record all tried weights, paired cost-adjusted outcomes, multiple-testing corrections, and uncertainty. | V3 walk-forward protocol available. A new prespecified final holdout and validation run remain open. |
+| 6 | Extend Data Engine coverage with public macro releases and known vintage identifiers. Publish event and sentiment timestamps and source evidence. Exercise missing-data states against the local warehouse. | SPY regime and warehouse SEC/corporate-action timeline shipped. Macro vintages and timestamped sentiment remain open. |
+| 7 | Surface Model Evidence and company context in Simple and Quant views. Teach the distinction between descriptive scores and predictive evidence in onboarding. | Company context and V4 Model Validation available. Expanded evidence and onboarding remain open. |
+| 8 | Evaluate entry conditions and thesis-review/exit signals separately, with outcome definitions, missed opportunities, downside, turnover and costs. Consider portfolio concentration only when holdings data supports it. | Open |
+
+Data Completeness owns coverage diagnostics and historical availability in
+warehouse publications. Sentiment Intelligence must supply timestamped evidence
+through the Data Engine before Analytics can use it. Investment Decision
+Research consumes versioned studies and keeps descriptive business quality,
+entry conditions, and exit review separate. Onboarding explains where the data
+comes from and how to interpret each form of evidence.
+
+## Original implementation tracker
+
+This table records the original warehouse rollout. Consult
+[upgrade status](upgrade_status.md) and the phase-specific guides for shipped
+work and remaining gaps.
+
 | Order | Increment | Acceptance gate | State |
 |---|---|---|---|
 | 0 | Source audit and baseline | Document actual modules, risks and baseline | Complete |
@@ -20,7 +53,7 @@ Do not expose strategy results before correctness gates pass.
 | 5 | Research experience | Existing React views extended, warehouse-only weekly report, archived score changes and outcome evaluation; API/build checks | Pending |
 | 6 | Optional local explanations | Ollama consumes structured results only; offline deterministic behavior unchanged | Pending |
 
-## Current increment: 1b
+### Original increment 1b
 
 Use the most recent stored observation for each security as the recovery anchor,
 not a fixed ten-day window from today. Request a configurable overlap before

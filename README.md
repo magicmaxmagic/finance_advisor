@@ -78,6 +78,8 @@ reports disclose uncertainty, coverage and survivorship bias.
 - [V3 validation methodology and results](docs/validation_v3.md)
 - [Frontend design, run commands and verification](frontend/README.md)
 - [V4 product guide and evidence policy](docs/product_v4.md)
+- [V5 implementation plan](docs/implementation_plan.md#current-track--v5-quantitative-evidence-and-financial-context)
+- [V5 company context methodology](docs/financial_context_v5.md)
 - [V4 UX audit](docs/ux_v4_audit.md)
 
 ## Architecture invariants
