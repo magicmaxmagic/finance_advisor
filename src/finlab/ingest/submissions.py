@@ -30,10 +30,18 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import duckdb
+import httpx
 import polars as pl
 
 from finlab.config import Settings, get_settings
-from finlab.ingest.sec import SecClient, submissions_url
+from finlab.ingest.sec import (
+    SecClient,
+    SecFailure,
+    SecPayloadError,
+    decode_sec_json,
+    sec_failure,
+    submissions_url,
+)
 from finlab.ingest.universe import Company, load_poc_universe
 from finlab.ingest.warehouse import publish_table
 
@@ -48,6 +56,7 @@ class SubmissionsReport:
     filings_updated: int
     entities_updated: int
     missing: list[int] = field(default_factory=list)
+    errors: dict[int, SecFailure] = field(default_factory=dict)
 
 
 def raw_dir(settings: Settings) -> Path:
@@ -164,6 +173,8 @@ async def fetch_submissions(
     *,
     force: bool = False,
     refresh_archives: bool | None = None,
+    resume_since: datetime | None = None,
+    errors: dict[int, SecFailure] | None = None,
 ) -> list[int]:
     """Download the submissions documents for each company. Returns missing CIKs.
 
@@ -174,24 +185,50 @@ async def fetch_submissions(
     depends on.
     """
     raw_dir(settings).mkdir(parents=True, exist_ok=True)
-    todo = [c for c in companies if force or not raw_path(settings, c.cik).is_file()]
-    missing: list[int] = []
+    errors = {} if errors is None else errors
+
+    def needs_fetch(path: Path, refresh: bool) -> bool:
+        if not path.is_file():
+            return True
+        return refresh and not (
+            resume_since and datetime.fromtimestamp(path.stat().st_mtime, UTC) >= resume_since
+        )
+
+    todo = [c for c in companies if needs_fetch(raw_path(settings, c.cik), force)]
 
     async with SecClient(settings) as client:
         if todo:
 
             async def one(company: Company) -> None:
-                body = await client.get_bytes(submissions_url(company.cik))
-                if body is None:
-                    missing.append(company.cik)
+                try:
+                    body = await client.get_bytes(submissions_url(company.cik))
+                    if body is None:
+                        errors[company.cik] = SecFailure("HTTP_404", False)
+                        return
+                    payload = decode_sec_json(body, company.cik)
+                    index = payload.get("filings")
+                    if not isinstance(index, dict):
+                        raise SecPayloadError("Missing SEC filings index")
+                    validate_filing_columns(index.get("recent"))
+                    files = index.get("files", [])
+                    if not isinstance(files, list):
+                        raise SecPayloadError("Invalid SEC archive index")
+                    for entry in files:
+                        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+                            raise SecPayloadError("Missing SEC archive page name")
+                        page_path(settings, entry["name"])
+                except (httpx.HTTPError, ValueError) as exc:
+                    errors[company.cik] = sec_failure(exc)
                     return
                 _write_gz(raw_path(settings, company.cik), body)
 
             await asyncio.gather(*(one(c) for c in todo))
 
         # Second pass: the index files are on disk now, so the page list is known.
-        pages: list[str] = []
+        pages: dict[str, set[int]] = {}
         for company in companies:
+            if company.cik in errors:
+                continue
             path = raw_path(settings, company.cik)
             if not path.is_file():
                 continue
@@ -199,22 +236,44 @@ async def fetch_submissions(
                 payload = json.load(handle)
             for entry in (payload.get("filings") or {}).get("files") or []:
                 name = entry.get("name")
-                if name and (
-                    (force if refresh_archives is None else refresh_archives)
-                    or not page_path(settings, name).is_file()
+                if name and needs_fetch(
+                    page_path(settings, name),
+                    force if refresh_archives is None else refresh_archives,
                 ):
-                    pages.append(name)
+                    pages.setdefault(name, set()).add(company.cik)
 
         if pages:
 
             async def page(name: str) -> None:
-                body = await client.get_bytes(f"{SUBMISSIONS_BASE}/{name}")
-                if body is not None:
-                    _write_gz(page_path(settings, name), body)
+                try:
+                    body = await client.get_bytes(f"{SUBMISSIONS_BASE}/{name}")
+                    if body is None:
+                        for cik in pages[name]:
+                            errors[cik] = SecFailure("ARCHIVE_PAGE_MISSING", False)
+                        return
+                    validate_filing_columns(decode_sec_json(body))
+                except (httpx.HTTPError, SecPayloadError) as exc:
+                    for cik in pages[name]:
+                        errors[cik] = sec_failure(exc)
+                    return
+                _write_gz(page_path(settings, name), body)
 
             await asyncio.gather(*(page(n) for n in pages))
 
-    return missing
+    return sorted(errors)
+
+
+def validate_filing_columns(block: object) -> None:
+    if not isinstance(block, dict):
+        raise SecPayloadError("Invalid SEC filing table")
+    columns = [block.get(key) for key in ("accessionNumber", "form", "filingDate")]
+    if (
+        not all(isinstance(column, list) for column in columns)
+        or len({len(c) for c in columns}) != 1
+    ):
+        raise SecPayloadError("SEC filing columns are missing or misaligned")
+    if any(not isinstance(value, str) or not value for column in columns for value in column):
+        raise SecPayloadError("SEC filing has a missing identifier, form or date")
 
 
 def load_submissions(
@@ -332,12 +391,23 @@ def ingest_submissions(
     *,
     force: bool = False,
     refresh_archives: bool | None = None,
+    resume_since: datetime | None = None,
 ) -> SubmissionsReport:
     cfg = settings or get_settings()
-    companies = load_poc_universe()
+    companies = load_poc_universe(cfg.universe_path)
+    errors: dict[int, SecFailure] = {}
     missing = asyncio.run(
-        fetch_submissions(companies, cfg, force=force, refresh_archives=refresh_archives)
+        fetch_submissions(
+            companies,
+            cfg,
+            force=force,
+            refresh_archives=refresh_archives,
+            resume_since=resume_since,
+            errors=errors,
+        )
     )
+    if missing:
+        return SubmissionsReport(len(companies), 0, 0, 0, missing, errors)
     report = load_submissions(con, companies, cfg)
     report.missing = missing
     return report

@@ -64,7 +64,8 @@ make prices-yahoo START=1996-01-01 END=2026-11-21
 
 Start in Overview for the benchmark, publication status and research candidates.
 Discover supports a sortable V2 screener and a separate legacy ranking. Company
-Research shows price history, score evidence and filing details. Compare keeps up
+Research shows price history, score evidence, reconciled financial performance,
+and the issuer's events calendar. Compare keeps up
 to four companies at the same cutoff. The guided Portfolio ledger supports buy
 and sell entry and optional CSV import. Model Validation, Strategies, Watchlist and
 Data Center have separate destinations.
@@ -78,8 +79,11 @@ reports disclose uncertainty, coverage and survivorship bias.
 - [V3 validation methodology and results](docs/validation_v3.md)
 - [Frontend design, run commands and verification](frontend/README.md)
 - [V4 product guide and evidence policy](docs/product_v4.md)
-- [V5 implementation plan](docs/implementation_plan.md#current-track--v5-quantitative-evidence-and-financial-context)
+- [V5 implementation track](docs/implementation_plan.md#v5-quantitative-evidence-and-financial-context)
 - [V5 company context methodology](docs/financial_context_v5.md)
+- [V6 financial repair, coverage, and held-out evaluation](docs/financial_repair_v6.md)
+- [V7 SEC reliability, financial coverage, and share classes](docs/data_reliability_v7.md)
+- [V7 financial performance, events, and score coverage](docs/financial_performance_v7.md)
 - [V4 UX audit](docs/ux_v4_audit.md)
 
 ## Architecture invariants

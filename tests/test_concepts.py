@@ -29,6 +29,7 @@ EXPECTED_CONCEPTS = {
     "debt_noncurrent",
     "commercial_paper",
     "interest_expense",
+    "nonoperating_interest_expense",
     "eps_diluted",
     "revenue",
     "cogs",

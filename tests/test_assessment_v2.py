@@ -61,9 +61,27 @@ def test_required_evidence_falls_back_within_slot_and_fails_closed_when_empty():
     del company["fundamental_factors"]["factors"]["current_ratio"]
     result = assess(company, cohort)
     assert result["risk_resilience_score"] is None
+    assert result["market_risk_score"] is not None
+    assert result["financial_risk_score"] is None
     assert result["opportunity_score"] is None
     assert assess(issuer(1, price_ready=False), cohort)["opportunity_score"] is None
     assert assess(cohort[0], cohort[:2])["opportunity_score"] is None
+
+
+def test_nonoperating_interest_fallback_requires_its_own_comparable_observations():
+    cohort = [issuer(i, instant_risk=False) for i in range(10)]
+    for i, row in enumerate(cohort):
+        factors = row["fundamental_factors"]["factors"]
+        factors.pop("interest_coverage")
+        if i < 8:
+            factors["nonoperating_interest_coverage"] = {"value": float(i + 1)}
+    full = assess(cohort[0], cohort)
+    assert full["financial_risk_score"] is not None
+    low_coverage = assess(cohort[0], cohort[:7] + cohort[8:])
+    financing = low_coverage["breakdown"]["risk"]["financial_risk"]["slots"][0]
+    assert financing["blockers"]["nonoperating_interest_coverage"]["code"] == "INSUFFICIENT_PEERS"
+    assert low_coverage["market_risk_score"] == pytest.approx(100 - 50 / 9)
+    assert low_coverage["risk_resilience_score"] is None
 
 
 def test_forward_rank_ic_and_missing_constituent_behavior():

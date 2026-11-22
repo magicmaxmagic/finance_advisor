@@ -53,7 +53,7 @@ def warehouse_status() -> dict:
             )
 
         publication = con.execute(
-            "SELECT epoch,published_at FROM _warehouse_publication"
+            "SELECT epoch,published_at,publication_scope,base_epoch FROM _warehouse_publication"
         ).fetchone()
         from finlab.ingest.calendar import last_completed_session
 
@@ -76,6 +76,8 @@ def warehouse_status() -> dict:
         return {
             "warehouse_epoch": publication[0],
             "published_at": publication[1],
+            "publication_scope": publication[2],
+            "base_epoch": publication[3],
             "price_label": "Latest available daily closes; delayed observations, not guaranteed real time",
             "datasets": {
                 "entity": count("entity"),
@@ -226,6 +228,16 @@ def data_status() -> dict:
     return read_status(get_settings().data_dir / "control")
 
 
+@app.get("/api/warehouse/financial-coverage")
+def financial_coverage(as_of: date | None = None) -> dict:
+    """Measure one cutoff of a validated publication without provider access."""
+    from finlab.analytics.coverage import coverage_report
+    from finlab.analytics.status import latest_research_date
+
+    cutoff = as_of or latest_research_date()
+    return coverage_report(cutoff, cutoff)
+
+
 @app.post("/api/data/refresh")
 def data_refresh() -> dict:
     """Request engine work without touching providers or the financial writer."""
@@ -321,6 +333,22 @@ def company_factor_details(identity: str, as_of: date | None = None) -> dict:
         from finlab.analytics.status import latest_research_date
 
         return company_factors(identity, as_of or latest_research_date())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/analytics/financial-performance/{identity}")
+def company_financial_performance(
+    identity: str, as_of: date | None = None, epoch: str | None = None
+) -> dict:
+    """Read consolidated income statements and calendar from a published epoch."""
+    from fastapi import HTTPException
+
+    from finlab.analytics.financial_performance import financial_performance
+    from finlab.analytics.status import latest_research_date
+
+    try:
+        return financial_performance(identity, as_of or latest_research_date(), epoch)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

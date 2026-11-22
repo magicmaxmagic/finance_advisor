@@ -10,12 +10,15 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/analytics/model-validation")
-def model_validation():
+def model_validation(study: Literal["v3", "v6"] = "v3"):
     """Read the latest archived study without running a simulation."""
     from finlab.analytics.validation_view import read_validation, summarize_validation
     from finlab.config import get_settings
 
-    report = read_validation(get_settings().reports_dir / "research")
+    directory = get_settings().reports_dir / "research"
+    report = (
+        read_validation(directory, holdout=True) if study == "v6" else read_validation(directory)
+    )
     if report is None:
         return {"reason": "No historical validation report has been archived."}
     return summarize_validation(report)
@@ -23,13 +26,18 @@ def model_validation():
 
 @router.get("/analytics/model-validation/series")
 def model_validation_series(
-    horizon: Literal["21", "63", "126", "252"] = "21", series: str = "opportunity"
+    horizon: Literal["21", "63", "126", "252"] = "21",
+    series: str = "opportunity",
+    study: Literal["v3", "v6"] = "v3",
 ):
     """Return the archived time series for one factor or model."""
     from finlab.analytics.validation_view import read_validation, validation_series
     from finlab.config import get_settings
 
-    report = read_validation(get_settings().reports_dir / "research")
+    directory = get_settings().reports_dir / "research"
+    report = (
+        read_validation(directory, holdout=True) if study == "v6" else read_validation(directory)
+    )
     if report is None:
         return {
             "reason": "No historical validation report has been archived.",

@@ -166,14 +166,21 @@ def complete(con: duckdb.DuckDBPyConnection, job_id: str) -> None:
     )
 
 
-def fail(con: duckdb.DuckDBPyConnection, job: Job, error: str) -> str:
+def fail(
+    con: duckdb.DuckDBPyConnection,
+    job: Job,
+    error: str,
+    *,
+    terminal: bool = False,
+    minimum_delay: float = 0,
+) -> str:
     """Record a failure. Returns the resulting state.
 
     Three strikes and the job goes to `deadletter` rather than retrying forever
     — a job that has failed three times is a bug report, not a transient.
     """
-    state = "deadletter" if job.attempts >= MAX_ATTEMPTS else "pending"
-    retry_at = _now() + timedelta(seconds=backoff_seconds(job.attempts))
+    state = "deadletter" if terminal or job.attempts >= MAX_ATTEMPTS else "pending"
+    retry_at = _now() + timedelta(seconds=max(minimum_delay, backoff_seconds(job.attempts)))
     con.execute(
         "UPDATE job SET state = ?, not_before = ?, locked_by = NULL, locked_at = NULL, "
         "error = ?, updated_at = ? WHERE job_id = ?",

@@ -12,6 +12,7 @@ from finlab.db.conn import attach_warehouse_views as attach_working_views
 from finlab.db.conn import new_read_conn
 from finlab.engine.snapshot import (
     CONTRACT_VERSION,
+    OPTIONAL_DATASETS,
     REQUIRED_DATASETS,
     _tree_checksum,
     read_latest_snapshot,
@@ -47,15 +48,7 @@ def require_valid_snapshot(warehouse_dir: Path, epoch: str | None = None) -> dic
         raise SnapshotUnavailable("Invalid warehouse epoch")
     root = warehouse_dir / "snapshots" / snapshot.epoch
     for name, status in snapshot.dataset_status.items():
-        if name not in (
-            *REQUIRED_DATASETS,
-            "fact",
-            "price_daily",
-            "universe_snapshot",
-            "corporate_action",
-            "price_ingestion",
-            "ticker_history",
-        ):
+        if name not in (*REQUIRED_DATASETS, *OPTIONAL_DATASETS):
             raise SnapshotUnavailable("Unknown published dataset")
         if status == "ready" and (
             not (root / name).is_dir()
@@ -68,6 +61,8 @@ def require_valid_snapshot(warehouse_dir: Path, epoch: str | None = None) -> dic
         "schema_version": snapshot.schema_version,
         "published_at": snapshot.published_at,
         "dataset_status": snapshot.dataset_status,
+        "publication_scope": snapshot.publication_scope,
+        "base_epoch": snapshot.base_epoch,
     }
 
 
@@ -80,8 +75,13 @@ def published_read_conn(settings: Settings | None = None, *, epoch: str | None =
     try:
         attach_working_views(con, cfg, warehouse_dir=snapshot["root"])
         con.execute(
-            "CREATE TEMP TABLE _warehouse_publication AS SELECT ?::VARCHAR AS epoch, ?::VARCHAR AS published_at",
-            [snapshot["epoch"], snapshot["published_at"]],
+            "CREATE TEMP TABLE _warehouse_publication AS SELECT ?::VARCHAR AS epoch, ?::VARCHAR AS published_at, ?::VARCHAR AS publication_scope, ?::VARCHAR AS base_epoch",
+            [
+                snapshot["epoch"],
+                snapshot["published_at"],
+                snapshot["publication_scope"],
+                snapshot["base_epoch"],
+            ],
         )
         yield con
     finally:

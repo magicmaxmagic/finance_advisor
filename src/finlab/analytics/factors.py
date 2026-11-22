@@ -153,7 +153,7 @@ def calculate_market_factors(
             else None
         )
         price_to_sma200 = latest / ma200 - 1 if ma200 else None
-        sma200_slope = ma200 / float(closes[-400:-200].mean()) - 1 if trading_days >= 400 else None
+        sma200_change = sma200_slope(closes)
         golden_cross = (
             bool(ma50 and ma200 and ma50 > ma200)
             if ma50 is not None and ma200 is not None
@@ -201,7 +201,7 @@ def calculate_market_factors(
             "ema50": ema50,
             "ema200": ema200,
             "price_to_sma200": price_to_sma200,
-            "sma200_slope": sma200_slope,
+            "sma200_slope": sma200_change,
             "golden_cross": golden_cross,
             "bollinger_upper": bb_mid + 2 * bb_std
             if bb_mid is not None and bb_std is not None
@@ -235,6 +235,12 @@ def calculate_market_factors(
     if not frames:
         return pl.DataFrame()
     return pl.concat(frames, how="vertical_relaxed")
+
+
+def sma200_slope(closes: pl.Series) -> float | None:
+    if len(closes) < 400:
+        return None
+    return float(closes[-200:].mean()) / float(closes[-400:-200].mean()) - 1
 
 
 def _rsi(closes: pl.Series, window: int = 14) -> float | None:

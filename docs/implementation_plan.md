@@ -4,7 +4,30 @@ Continue the existing application; each increment must leave existing tests,
 Ruff checks and frontend build green. Use deterministic fixtures for core tests.
 Do not expose strategy results before correctness gates pass.
 
-## Current track — V5 quantitative evidence and financial context
+## Current track — V7 data reliability
+
+[V7 Stage 1](data_reliability_v7.md) documents the completed software changes,
+the pending SEC source gap and the same-epoch coverage results. Share-class
+evidence from Alphabet's filing is staged. Exact market capitalization still
+requires supported quotes for all economic classes. New research model
+experiments and promotion remain separate from the data reliability work.
+
+## V6 data repair and Company Research
+
+The [V6 repair report](financial_repair_v6.md) records the Alphabet trace,
+publication identifiers, coverage before and after, and commands.
+
+| Milestone | State |
+|---|---|
+| A. Alphabet correctness | Fixed nonoperating interest coverage and SMA200 history. Risk scores are independently visible. Class-based capitalization still needs validated data. |
+| B. Generalized coverage | CLI measures the configured universe by year and business model. Expanded issuer-specific and dimensional extraction remains open. |
+| C. Context and explanation | Added structured formula and score-slot failures and explicit supported group evidence. Dated peer coverage and macro-release vintages remain open. |
+| D. Company Research | Moved the price chart ahead of metric details. Added chart navigation, glossary, persistent evidence mode, and print-specific layout. |
+| E. Historical validation | Added a separately archived, fixed-cutoff holdout with frozen selection and a Model Validation study selector. |
+| F. Decision research | Entry and thesis-review conditions have separate forward outcome diagnostics. Position-aware exit simulation and portfolio turnover for those hypotheses remain open. |
+| G. Sentiment and onboarding | Company Research includes a skippable first-visit guide and metric glossary. Calibrated sentiment and application-wide onboarding remain open. |
+
+## V5 quantitative evidence and financial context
 
 V5 extends the V4 research experience and preserves the production scoring
 version and configurable 60/25/15 defaults. V3's local research archive remains

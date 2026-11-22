@@ -1,6 +1,6 @@
 """Aligned annual fundamentals; unsupported denominators remain unavailable."""
 
-from datetime import date
+from datetime import date, timedelta
 from itertools import pairwise
 from math import isfinite
 from statistics import pstdev
@@ -8,8 +8,8 @@ from statistics import pstdev
 DEFINITIONS = {
     "equity_to_assets": "Latest aligned fiscal-year parent book equity / total assets. Accounting capital proxy, not a regulatory capital ratio.",
     "net_margin": "Annual parent net income / annual revenue, same reporting period.",
-    "ttm_pe": "Reported-share market cap divided by positive net income summed over four contiguous reported fiscal quarters.",
-    "ttm_earnings_yield": "Positive net income summed over four contiguous reported fiscal quarters divided by reported-share market cap.",
+    "ttm_pe": "Reported-share market cap divided by positive trailing net income from four contiguous quarters or an aligned fiscal-year and YTD bridge.",
+    "ttm_earnings_yield": "Positive trailing net income from four contiguous quarters or an aligned fiscal-year and YTD bridge divided by reported-share market cap.",
     "trailing_pe": "Reported-share market capitalization / positive latest published fiscal-year parent net income. Historical API key; fiscal-year multiple.",
     "gross_margin": "(Revenue - reported cost of revenue) / revenue.",
     "ebitda_margin": "(Operating income + reported D&A) / revenue.",
@@ -22,6 +22,7 @@ DEFINITIONS = {
     "cash_to_debt": "Cash / verified debt.",
     "current_ratio": "Current assets / current liabilities.",
     "interest_coverage": "Operating income / reported interest expense.",
+    "nonoperating_interest_coverage": "Operating income / separately reported gross nonoperating interest expense.",
     "operating_margin": "Annual operating income / annual revenue, same reporting period.",
     "fcf_margin": "(Annual operating cash flow - selected capital expenditures) / annual revenue.",
     "cash_flow_quality": "Annual operating cash flow / positive annual net income.",
@@ -42,6 +43,24 @@ DEFINITIONS = {
     "debt_to_assets": "Verified combined interest-bearing debt / same-date positive assets.",
 }
 
+MARKET_VALUE_RATIOS = {
+    "trailing_pe",
+    "earnings_yield",
+    "ttm_pe",
+    "ttm_earnings_yield",
+    "price_to_fcf",
+    "fcf_yield",
+    "price_to_sales",
+    "price_to_book",
+    "ev_to_ebit",
+    "ev_to_revenue",
+    "ev_to_operating_ebitda",
+}
+
+
+def diagnostic(code, message):
+    return {"code": code, "message": message}
+
 
 def calculate_fundamentals(
     observations: list[dict],
@@ -49,6 +68,7 @@ def calculate_fundamentals(
     market_cap: float | None = None,
     *,
     financial_issuer: bool = False,
+    market_cap_diagnostic=None,
 ) -> dict:
     if market_cap is not None and (not isfinite(market_cap) or market_cap <= 0):
         market_cap = None
@@ -102,6 +122,20 @@ def calculate_fundamentals(
         record = selected.get(("equity", day, "instant"))
         if record and record.get("source_tag") == "StockholdersEquity":
             return fact("equity", day, "instant")
+        minority = selected.get(("noncontrolling_interest", day, "instant"))
+        if (
+            record
+            and record.get("source_tag")
+            == "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+            and minority
+            and minority.get("source_tag") == "MinorityInterest"
+            and record["accession_number"]
+            and record["accession_number"] == minority["accession_number"]
+            and record["filed_date"] == minority["filed_date"]
+            and isfinite(record["value"])
+            and isfinite(minority["value"])
+        ):
+            return record["value"] - minority["value"]
         return None
 
     def verified_debt(day):
@@ -188,6 +222,9 @@ def calculate_fundamentals(
                 fact("current_assets", day, "instant"), fact("current_liabilities", day, "instant")
             ),
             interest_coverage=divide(operating, fact("interest_expense", day)),
+            nonoperating_interest_coverage=divide(
+                operating, fact("nonoperating_interest_expense", day)
+            ),
         )
         values["price_to_book"] = divide(market_cap, equity)
         if len(annual) > 1 and year_pair(day, annual[1]):
@@ -268,6 +305,7 @@ def calculate_fundamentals(
             "debt_to_assets",
             "reported_debt_to_assets",
             "interest_coverage",
+            "nonoperating_interest_coverage",
             "current_ratio",
             "cash_to_debt",
             "fcf_margin",
@@ -282,9 +320,152 @@ def calculate_fundamentals(
     for key in nonapplicable:
         values[key] = None
     ttm, quarters = trailing_income(list(selected.values()), as_of)
+    bridged, bridge = trailing_income_bridge(list(selected.values()), as_of)
+    if bridge and (not quarters or bridge[0]["period_end"] > quarters[0]["period_end"]):
+        ttm = bridged
+        quarters = []
+    else:
+        bridge = []
     if ttm is not None and ttm > 0:
         values["ttm_pe"] = divide(market_cap, ttm)
         values["ttm_earnings_yield"] = divide(ttm, market_cap)
+
+    def missing(key):
+        if key in nonapplicable:
+            return diagnostic(
+                "NOT_APPLICABLE", "This ratio is outside the financial-issuer policy."
+            )
+        if key.startswith("ttm_"):
+            if ttm is None:
+                return diagnostic(
+                    "INSUFFICIENT_HISTORY",
+                    "Four aligned quarters or an exactly aligned fiscal-year and comparative YTD bridge are required.",
+                )
+            if ttm <= 0:
+                return diagnostic(
+                    "INVALID_DENOMINATOR", "The ratio requires positive trailing net income."
+                )
+        else:
+            if not annual:
+                return diagnostic(
+                    "SOURCE_MISSING", "No published annual revenue period anchors this ratio."
+                )
+            day = annual[0]
+            if (as_of - day).days > 550:
+                return diagnostic(
+                    "STALE_DATA", "The last annual reporting period ended over 550 days ago."
+                )
+            denominators = {
+                "trailing_pe": "net_income",
+                "earnings_yield": "net_income",
+                "interest_coverage": "interest_expense",
+                "nonoperating_interest_coverage": "nonoperating_interest_expense",
+                "revenue_growth": "revenue",
+                "earnings_growth": "net_income",
+            }
+            if key in denominators:
+                name = denominators[key]
+                prior = key in {"revenue_growth", "earnings_growth"}
+                if prior and (len(annual) < 2 or not year_pair(day, annual[1])):
+                    return diagnostic(
+                        "INSUFFICIENT_HISTORY", "Two comparable annual periods are required."
+                    )
+                period = annual[1] if prior else day
+                value = fact(name, period)
+                if value is None:
+                    code = (
+                        "INVALID_FISCAL_ALIGNMENT"
+                        if (name, period, "annual") in selected
+                        else "SOURCE_MISSING"
+                    )
+                    return diagnostic(
+                        code, f"An aligned {name.replace('_', ' ')} observation is required."
+                    )
+                if value <= 0:
+                    return diagnostic(
+                        "INVALID_DENOMINATOR",
+                        f"The ratio requires positive {name.replace('_', ' ')}.",
+                    )
+            if key == "current_ratio":
+                liabilities = fact("current_liabilities", day, "instant")
+                if liabilities is not None and liabilities <= 0:
+                    return diagnostic(
+                        "INVALID_DENOMINATOR", "Current liabilities must be positive."
+                    )
+            if key in {"price_to_fcf", "price_to_book"}:
+                denominator = fcf(day) if key == "price_to_fcf" else parent_equity(day)
+                if denominator is not None and denominator <= 0:
+                    return diagnostic(
+                        "INVALID_DENOMINATOR",
+                        "The ratio requires positive free cash flow or parent equity, respectively.",
+                    )
+        if key in MARKET_VALUE_RATIOS and market_cap is None:
+            return market_cap_diagnostic or diagnostic(
+                "SOURCE_MISSING", "A verified market value is required."
+            )
+        if not key.startswith("ttm_"):
+            day = annual[0]
+            if key.startswith("ev_to_"):
+                if any(v is None for v in claims):
+                    return diagnostic(
+                        "SOURCE_MISSING", "Complete enterprise-value claims and cash are required."
+                    )
+                denominator = {
+                    "ev_to_operating_ebitda": operating + da
+                    if operating is not None and da is not None
+                    else None,
+                    "ev_to_revenue": revenue,
+                    "ev_to_ebit": operating,
+                }[key]
+                if denominator is not None and (denominator <= 0 or sum(claims[:4]) <= claims[4]):
+                    return diagnostic(
+                        "INVALID_DENOMINATOR",
+                        "Enterprise value and the selected earnings or sales basis must be positive.",
+                    )
+            if (
+                key
+                in {
+                    "debt_to_assets",
+                    "debt_to_equity",
+                    "cash_to_debt",
+                    "net_debt_to_ebitda",
+                    "roic",
+                }
+                and verified_debt(day) is None
+            ):
+                record = selected.get(("total_debt", day, "instant"))
+                if record:
+                    return diagnostic(
+                        "UNSUPPORTED",
+                        f"{record['source_tag']} does not establish complete combined short- and long-term debt.",
+                    )
+                return diagnostic(
+                    "SOURCE_MISSING",
+                    "A verified combined short- and long-term debt observation is missing.",
+                )
+            if key == "reported_debt_to_assets" and all(record is not None for record in records):
+                return diagnostic(
+                    "INVALID_FISCAL_ALIGNMENT",
+                    "Reported debt components must reconcile on the same date and filing.",
+                )
+            if key in {
+                "roa",
+                "roe",
+                "growth_acceleration",
+                "fcf_growth",
+                "margin_change",
+                "earnings_variability",
+            }:
+                required = {"growth_acceleration": 3, "earnings_variability": 5}.get(key, 2)
+                if len(annual) < required or not all(
+                    year_pair(a, b) for a, b in pairwise(annual[:required])
+                ):
+                    return diagnostic(
+                        "INSUFFICIENT_HISTORY",
+                        f"{required} comparable annual periods are required.",
+                    )
+        return diagnostic("SOURCE_MISSING", "The required aligned filing inputs are unavailable.")
+
     return {
         "as_of": str(as_of),
         "period_type": "latest_published_fiscal_year",
@@ -292,6 +473,18 @@ def calculate_fundamentals(
         "ttm_quarter_evidence": [
             {**row, **{key: str(row[key]) for key in ("period_start", "period_end", "filed_date")}}
             for row in quarters
+        ],
+        "ttm_bridge_evidence": [
+            {
+                **row,
+                "operation": operation,
+                **{key: str(row[key]) for key in ("period_start", "period_end", "filed_date")},
+            }
+            for row, operation in zip(
+                bridge,
+                ("add_current_ytd", "add_prior_fiscal_year", "subtract_prior_ytd"),
+                strict=False,
+            )
         ],
         "filing_evidence": [
             {
@@ -325,11 +518,12 @@ def calculate_fundamentals(
                 if value is not None
                 else "insufficient_aligned_inputs",
                 "definition": DEFINITIONS[key],
+                "diagnostic": missing(key) if value is None else None,
             }
             for key, value in values.items()
         },
         "limitations": [
-            "Fiscal-year ratios use annual statements. Explicit TTM ratios require four contiguous reported quarters.",
+            "Fiscal-year ratios use annual statements. TTM requires four contiguous reported quarters or an aligned fiscal-year bridge with comparative YTD in the same filing.",
             "Unverified debt definitions, missing claims or nonpositive denominators are not imputed.",
             "Market value uses latest reported shares and can lag actual issuance/buybacks.",
         ],
@@ -370,3 +564,60 @@ def trailing_income(observations, as_of):
     ):
         return None, []
     return sum(row["value"] for row in quarters), quarters
+
+
+def trailing_income_bridge(observations, as_of):
+    """FY + current YTD - prior YTD with both YTD facts from one filing."""
+    income = [
+        row
+        for row in observations
+        if row["canonical"] == "net_income"
+        and row["period_start"]
+        and row["filed_date"] <= as_of
+        and row["period_end"] <= as_of
+        and isfinite(row["value"])
+    ]
+    annual = max(
+        (row for row in income if row["duration_bucket"] == "annual"),
+        key=lambda row: row["period_end"],
+        default=None,
+    )
+    if annual is None or not 350 <= (annual["period_end"] - annual["period_start"]).days <= 380:
+        return None, []
+    ranges = {"quarter": (80, 100), "half": (170, 190), "ytd9": (260, 285)}
+    current = max(
+        (
+            row
+            for row in income
+            if row["duration_bucket"] in ranges
+            and row["period_start"] == annual["period_end"] + timedelta(days=1)
+        ),
+        key=lambda row: row["period_end"],
+        default=None,
+    )
+    if (
+        current is None
+        or (as_of - current["period_end"]).days > 180
+        or annual["filed_date"] > current["filed_date"]
+    ):
+        return None, []
+    length = (current["period_end"] - current["period_start"]).days
+    minimum, maximum = ranges[current["duration_bucket"]]
+    if not minimum <= length <= maximum:
+        return None, []
+    comparable = [
+        prior
+        for prior in income
+        if prior["period_start"] == annual["period_start"]
+        and prior["duration_bucket"] == current["duration_bucket"]
+        and prior["accession_number"] == current["accession_number"]
+        and prior["filed_date"] == current["filed_date"]
+        and minimum <= (prior["period_end"] - prior["period_start"]).days <= maximum
+        and abs((prior["period_end"] - prior["period_start"]).days - length) <= 7
+        and len({annual["source_tag"], current["source_tag"], prior["source_tag"]}) == 1
+        and 350 <= (current["period_end"] - prior["period_end"]).days <= 380
+    ]
+    if len(comparable) != 1:
+        return None, []
+    prior = comparable[0]
+    return annual["value"] + current["value"] - prior["value"], [current, annual, prior]

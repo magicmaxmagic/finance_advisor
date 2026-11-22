@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from bisect import bisect_left
 from datetime import timedelta
 from itertools import combinations, pairwise
 from math import isfinite
@@ -10,11 +11,13 @@ from uuid import uuid4
 import numpy as np
 
 from finlab import config
+from finlab.analytics.assessment import VERSION as SCORING_VERSION
 from finlab.analytics.assessment import assess, assessment_cohort, values
 from finlab.analytics.provenance import archive_sources, code_hash, runtime_versions
 from finlab.analytics.rankings import historical_rankings
 from finlab.analytics.snapshot import attached_views, published_read_conn, require_valid_snapshot
 from finlab.ingest.universe import load_poc_universe
+from finlab.research.decision_evidence import decision_flags, decision_outcomes, summarize_decisions
 from finlab.research.score_validation import (
     HORIZONS,
     daily_buy_and_hold,
@@ -40,6 +43,23 @@ FACTORS = {
     "max_drawdown": 1,
     "debt_to_assets": -1,
     "reported_debt_to_assets": -1,
+}
+HOLDOUT_FACTORS = {
+    **FACTORS,
+    "sma200_slope": 1,
+    "return_3m": 1,
+    "return_6m": 1,
+    "earnings_growth": 1,
+    "nonoperating_interest_coverage": 1,
+}
+MARKET_FACTORS = {
+    "sma200_slope",
+    "price_to_sma200",
+    "return_3m",
+    "return_6m",
+    "return_12m",
+    "annualized_volatility",
+    "max_drawdown",
 }
 MIXES = {
     "fundamental": (1, 0, 0),
@@ -214,6 +234,9 @@ def _summary(folds, key, domain):
             summarize([row["quintile_net_returns"][i] for row in rows]) for i in range(5)
         ]
         result["monotonicity"] = summarize([row["monotonicity"] for row in rows])
+        result["rank_stability"] = summarize(
+            [fold.get("factor_rank_stability", {}).get(key) for fold in folds]
+        )
         return result
     paths = [row["daily"] if row else None for row in rows]
     complete_indices = [i for i, path in enumerate(paths) if path is not None]
@@ -247,8 +270,23 @@ def _summary(folds, key, domain):
     return result
 
 
-def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo, rolling):
+def _collect(
+    start,
+    end,
+    epoch,
+    *,
+    stride,
+    cost_bps,
+    train,
+    validation,
+    embargo,
+    rolling,
+    test_start=None,
+    baseline_folds=None,
+):
     epoch, spy, sessions, panel = forward_price_panel(start, end, epoch)
+    boundary = bisect_left(sessions, test_start) if test_start else None
+    factor_directions = HOLDOUT_FACTORS if test_start else FACTORS
     with published_read_conn(epoch=epoch) as con:
         metadata = {
             sid: (delisting, reason)
@@ -270,6 +308,16 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
     folds = {h: [] for h in HORIZONS}
     next_signal = dict.fromkeys(HORIZONS, 0)
     previous = {h: {} for h in HORIZONS}
+    prior_factors = {h: {} for h in HORIZONS}
+    frozen_selection = {}
+    baseline_rows = {
+        (int(h), row["signal_date"], row["entry_date"], row["exit_date"]): row["models"][
+            "opportunity"
+        ]
+        for h, rows in (baseline_folds or {}).items()
+        for row in rows
+    }
+    matched = {h: [] for h in HORIZONS}
     for ix in range(0, len(sessions) - 21, stride):
         horizons = [h for h in HORIZONS if ix >= next_signal[h] and ix + h < len(sessions)]
         if not horizons:
@@ -279,8 +327,9 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
         _, cohort, captured = assessment_cohort(date, epoch, filing_cutoff=fact_date)
         legacy = historical_rankings(date, epoch=epoch, filing_cutoff=fact_date)
         eligible = {r["security_id"]: r for r in cohort if r["eligible"]}
-        oriented = {name: {} for name in FACTORS}
+        oriented = {name: {} for name in factor_directions}
         dimensions, raw_values = {}, {}
+        flags = {}
         legacy_scores = {
             row["security_id"]: row["score"] for row in legacy["rows"] if row["score"] is not None
         }
@@ -289,6 +338,12 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
             raw["eps_growth"] = eps_growth(row)
             raw_values[sid] = raw
             assessment = assess(row, cohort)
+            if boundary is not None and row["market_ready"]:
+                flags[sid] = decision_flags(
+                    assessment["fundamental_score"],
+                    raw.get("price_to_sma200"),
+                    raw.get("margin_change"),
+                )
             scores = tuple(
                 assessment[key]
                 for key in ("fundamental_score", "technical_score", "risk_resilience_score")
@@ -299,14 +354,9 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
                 and sid in legacy_scores
             ):
                 dimensions[sid] = scores
-            for key, direction in FACTORS.items():
+            for key, direction in factor_directions.items():
                 value = raw.get(key)
-                market = key in {
-                    "price_to_sma200",
-                    "return_12m",
-                    "annualized_volatility",
-                    "max_drawdown",
-                }
+                market = key in MARKET_FACTORS
                 if value is not None and isfinite(value) and (not market or row["market_ready"]):
                     oriented[key][sid] = direction * value
         models = {
@@ -327,7 +377,7 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
             if (raw_values[sid].get("price_to_sma200") or 0) > 0
         }
         correlation = {}
-        for left, right in combinations(FACTORS, 2):
+        for left, right in combinations(factor_directions, 2):
             ids = sorted(oriented[left].keys() & oriented[right].keys())
             correlation[f"{left}/{right}"] = rank_ic(
                 [oriented[left][sid] for sid in ids], [oriented[right][sid] for sid in ids]
@@ -356,14 +406,55 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
                 sorted(dimensions), panel, days, cost, benchmark
             )
             model_rows["spy"] = _portfolio_row([spy], panel, days, cost, benchmark)
-            choice = choose_weights(
-                folds[horizon],
-                ix,
-                train=train,
-                validation=validation,
-                embargo=embargo,
-                rolling=rolling,
-            )
+            old = baseline_rows.get((horizon, str(date), str(days[0]), str(days[-1])))
+            if old is not None and old["quintiles"]:
+                ids = {sid for bucket in old["quintiles"] for sid in bucket["security_ids"]}
+                scores = models["opportunity"]
+                # Preserve the original membership. Exclude incomparable windows rather
+                # than compare an original result with a smaller intersection.
+                current = (
+                    _model_metrics(
+                        {sid: scores[sid] for sid in ids}, outcomes, benchmark, cost, panel, days
+                    )
+                    if ids <= scores.keys()
+                    and old["matched"] == len(ids)
+                    and ids <= outcomes.keys()
+                    else None
+                )
+                matched[horizon].append(
+                    {
+                        "signal_date": str(date),
+                        "baseline_names": len(ids),
+                        "current_names": len(scores),
+                        "shared_names": len(ids & scores.keys()),
+                        "baseline_rank_ic": old["rank_ic"],
+                        "baseline_excess_net": old["top_excess_net"],
+                        "matched_rank_ic": current["rank_ic"] if current else None,
+                        "matched_excess_net": current["top_excess_net"] if current else None,
+                        "expanded_rank_ic": model_rows["opportunity"]["rank_ic"],
+                        "expanded_excess_net": model_rows["opportunity"]["top_excess_net"],
+                    }
+                )
+            if boundary is None:
+                choice = choose_weights(
+                    folds[horizon],
+                    ix,
+                    train=train,
+                    validation=validation,
+                    embargo=embargo,
+                    rolling=rolling,
+                )
+            else:
+                if ix >= boundary and horizon not in frozen_selection:
+                    frozen_selection[horizon] = choose_weights(
+                        folds[horizon],
+                        boundary,
+                        train=train,
+                        validation=validation,
+                        embargo=embargo,
+                        rolling=rolling,
+                    )
+                choice = frozen_selection.get(horizon, {"selected": None})
             model_rows["adaptive_oos"] = model_rows.get(choice["selected"])
             missing = set(eligible) - set(outcomes)
             known_delists = [
@@ -379,6 +470,14 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
                     [scores[sid] for sid in shared], [prior[sid] for sid in shared]
                 )
             previous[horizon] = models
+            factor_stability = {}
+            for key, scores in oriented.items():
+                prior = prior_factors[horizon].get(key, {})
+                shared = sorted(scores.keys() & prior.keys())
+                factor_stability[key] = rank_ic(
+                    [scores[sid] for sid in shared], [prior[sid] for sid in shared]
+                )
+            prior_factors[horizon] = oriented
             folds[horizon].append(
                 dict(
                     signal_date=str(date),
@@ -411,8 +510,17 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
                     selection=choice,
                     feature_correlations=correlation,
                     rank_stability=ranks,
+                    factor_rank_stability=factor_stability,
+                    decisions=decision_outcomes(flags, outcomes, benchmark, cost)
+                    if boundary is not None
+                    else {},
                 )
             )
+    if boundary is not None:
+        folds = {
+            horizon: [row for row in rows if row["signal_index"] >= boundary]
+            for horizon, rows in folds.items()
+        }
     summary = {}
     model_names = (
         *MIXES,
@@ -425,10 +533,39 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
     )
     for h, rows in folds.items():
         summary[str(h)] = dict(
-            factors={key: _summary(rows, key, "factors") for key in FACTORS},
+            factors={key: _summary(rows, key, "factors") for key in factor_directions},
             models={key: _summary(rows, key, "models") for key in model_names},
         )
         summary[str(h)]["paired_vs_fundamental"] = {}
+        if baseline_folds is not None:
+            samples = matched[h]
+            summary[str(h)]["matched_baseline"] = {
+                "windows": len(samples),
+                "samples": samples,
+                "availability_delta": sum(
+                    row["current_names"] - row["baseline_names"] for row in samples
+                ),
+                "paired_rank_ic_change": summarize(
+                    [
+                        row["matched_rank_ic"] - row["baseline_rank_ic"]
+                        if row["matched_rank_ic"] is not None
+                        and row["baseline_rank_ic"] is not None
+                        else None
+                        for row in samples
+                    ]
+                ),
+                "paired_net_excess_change": summarize(
+                    [
+                        row["matched_excess_net"] - row["baseline_excess_net"]
+                        if row["matched_excess_net"] is not None
+                        and row["baseline_excess_net"] is not None
+                        else None
+                        for row in samples
+                    ]
+                ),
+            }
+        if boundary is not None:
+            summary[str(h)]["decision_evidence"] = summarize_decisions(rows)
         for model in model_names:
             if model == "fundamental":
                 continue
@@ -446,7 +583,7 @@ def _collect(start, end, epoch, *, stride, cost_bps, train, validation, embargo,
         }
         for (h, key), p in holm(tests).items():
             summary[h][domain][key]["holm_p_value"] = p
-    return dict(folds=folds, summary=summary)
+    return dict(folds=folds, summary=summary, frozen_selection=frozen_selection)
 
 
 def run_v3(
@@ -460,6 +597,8 @@ def run_v3(
     validation=12,
     embargo=1,
     rolling=False,
+    test_start=None,
+    baseline_report=None,
 ):
     if (
         not isfinite(cost_bps)
@@ -467,30 +606,56 @@ def run_v3(
         or end <= start
         or min(stride, train, validation) < 1
         or embargo < 0
+        or (test_start is not None and not start < test_start < end)
     ):
         raise ValueError("Invalid V3 dates or study parameters")
     cfg = config.get_settings()
     stamp = require_valid_snapshot(cfg.warehouse_dir, epoch)["epoch"]
     source_hash = code_hash()
+    baseline_bytes = baseline_report.read_bytes() if baseline_report else None
+    baseline = json.loads(baseline_bytes) if baseline_bytes else None
+    params = dict(
+        stride=stride,
+        cost_bps=cost_bps,
+        train=train,
+        validation=validation,
+        embargo=embargo,
+        rolling=rolling,
+    )
+    if baseline is not None and (
+        not test_start
+        or baseline["test_start"] != str(test_start)
+        or baseline["start"] != str(start)
+        or baseline["end"] != str(end)
+        or baseline["params"] != params
+        or baseline["scoring_version"] != SCORING_VERSION
+    ):
+        raise ValueError("The baseline must use the same dates, protocol and scoring version")
+    prefix = (
+        "validation-v7"
+        if baseline is not None
+        else "validation-v6"
+        if test_start
+        else "validation-v3"
+    )
     metadata = dict(
-        version=VERSION,
+        version="signal-research-v7.2"
+        if baseline is not None
+        else "signal-research-v6.1"
+        if test_start
+        else VERSION,
+        scoring_version=SCORING_VERSION,
         warehouse_epoch=stamp,
         code_sha256=source_hash,
         runtime_versions=runtime_versions(),
         start=str(start),
         end=str(end),
-        params=dict(
-            stride=stride,
-            cost_bps=cost_bps,
-            train=train,
-            validation=validation,
-            embargo=embargo,
-            rolling=rolling,
-        ),
+        params=params,
         universe_ids=[c.security_id for c in load_poc_universe(cfg.universe_path)],
         candidates=CANDIDATES,
         weight_grid=MIXES,
-        factor_directions=FACTORS,
+        factor_directions=HOLDOUT_FACTORS if test_start else FACTORS,
+        test_start=str(test_start) if test_start else None,
         evidence_status="Predictive evidence inconclusive.",
         limitations=[
             "Surviving-universe study wherever historical membership was not captured. Captured membership is intersected with the configured seed, not a full market universe.",
@@ -501,6 +666,11 @@ def run_v3(
             "The risk constraint removes the lowest resilience quintile before ranking. The entry filter requires a close above SMA200. Both screen an eligible seed and can change concentration.",
         ],
     )
+    if baseline is not None:
+        metadata["baseline"] = {
+            "sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+            "epoch": baseline["warehouse_epoch"],
+        }
     params = json.dumps(metadata, sort_keys=True, allow_nan=False)
     directory = cfg.reports_dir / "research"
     with research_trial(
@@ -516,16 +686,18 @@ def run_v3(
             validation=validation,
             embargo=embargo,
             rolling=rolling,
+            test_start=test_start,
+            baseline_folds=baseline["folds"] if baseline is not None else None,
         )
         archive_sources(directory, source_hash)
         report = {**result, **metadata}
         encoded = json.dumps(report, allow_nan=False, sort_keys=True)
         digest = hashlib.sha256(encoded.encode()).hexdigest()[:16]
-        target = directory / f"validation-v3-{start}-{end}-{digest}.json"
+        target = directory / f"{prefix}-{start}-{end}-{digest}.json"
         temporary = target.with_name(f".{uuid4().hex}.tmp")
         temporary.write_text(encoded)
         temporary.replace(target)
-        latest = directory / "validation-v3-latest.json"
+        latest = directory / f"{prefix}-latest.json"
         temporary.write_text(encoded)
         temporary.replace(latest)
         trial.update(result["summary"])

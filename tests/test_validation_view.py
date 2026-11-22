@@ -105,3 +105,19 @@ def test_local_api_series_projects_only_requested_archive(archived_report, monke
         client.get("/api/analytics/model-validation/series?horizon=21&series=unknown").status_code
         == 404
     )
+    assert "reason" in client.get("/api/analytics/model-validation?study=v6").json()
+    holdout = {
+        **deepcopy(archived_report),
+        "version": "signal-research-v6.1",
+        "test_start": "2020-01-02",
+    }
+    holdout["folds"]["21"][0]["models"]["opportunity"]["rank_ic"] = -0.15
+    (directory / "validation-v6-latest.json").write_text(json.dumps(holdout))
+    assert (
+        client.get("/api/analytics/model-validation?study=v6").json()["test_start"] == "2020-01-02"
+    )
+    assert (
+        client.get("/api/analytics/model-validation/series?study=v6").json()["windows"][0]["ic"]
+        == -0.15
+    )
+    assert client.get("/api/analytics/model-validation/series").json()["windows"][0]["ic"] == 0.2

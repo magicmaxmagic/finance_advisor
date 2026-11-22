@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Annotated
+
 import typer
 import uvicorn
 
@@ -9,6 +12,38 @@ from finlab.analytics.snapshot import SnapshotUnavailable, require_valid_snapsho
 from finlab.config import get_settings
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+
+
+@app.command("coverage")
+def coverage(
+    start: str = typer.Argument(help="First calendar year to include (YYYY-MM-DD)."),
+    end: str = typer.Argument(help="Final assessment cutoff (YYYY-MM-DD)."),
+    epoch: str | None = typer.Option(None, help="Pin a published warehouse epoch."),
+) -> None:
+    """Measure raw metrics and scores across the eligible universe."""
+    import json
+    from datetime import date
+
+    from finlab.analytics.coverage import coverage_report
+
+    try:
+        report = coverage_report(date.fromisoformat(start), date.fromisoformat(end), epoch)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+
+
+@app.command("score-blockers")
+def score_blockers(as_of: str, epoch: str | None = None) -> None:
+    """List score dependencies and affected issuers on one immutable snapshot."""
+    import json
+    from datetime import date
+
+    from finlab.analytics.coverage import score_dependencies
+
+    typer.echo(
+        json.dumps(score_dependencies(date.fromisoformat(as_of), epoch), indent=2, allow_nan=False)
+    )
 
 
 @app.command("status")
@@ -211,6 +246,10 @@ def validate_signals(
     validation: int = 12,
     embargo: int = 1,
     rolling: bool = False,
+    test_start: str | None = typer.Option(
+        None, help="Freeze selection before this final test cutoff."
+    ),
+    baseline_report: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
 ) -> None:
     """Archive factor, ablation and walk-forward signal research."""
     from datetime import date
@@ -228,6 +267,8 @@ def validate_signals(
             validation=validation,
             embargo=embargo,
             rolling=rolling,
+            test_start=date.fromisoformat(test_start) if test_start else None,
+            baseline_report=baseline_report,
         )
     )
 

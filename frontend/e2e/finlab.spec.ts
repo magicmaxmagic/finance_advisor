@@ -116,8 +116,32 @@ test('research evidence changes by horizon and operations has an explicit confir
   await capture(page, 'validation-1440')
   await page.getByLabel('Forward horizon').selectOption('252')
   await expect(page.getByText('Insufficient evidence', { exact: true })).toBeVisible()
+  const candidate = await page.request.get('/api/analytics/model-validation?study=v6')
+  expect(candidate.ok()).toBe(true)
+  const report = await candidate.json()
+  await page.getByLabel('Validation study').selectOption('v6')
+  if (report.test_start) {
+    await expect(page.getByText(/Model selection stops before that boundary/)).toBeVisible()
+    await page.getByLabel('Forward horizon').selectOption('21')
+    await expect(page.getByRole('heading', { name: 'Entry and thesis review' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Rank IC by decision date' })).toBeVisible()
+    await capture(page, 'validation-holdout-1440')
+  } else {
+    await expect(page.getByText('No historical validation report has been archived.')).toBeVisible()
+  }
   await page.getByRole('button', { name: 'Data Center', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Synchronization health' })).toBeVisible()
+  await expect(page.getByText('SEC statements', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Inspect coverage', exact: true }).click()
+  await expect(page.getByText('Financial metric coverage', { exact: true })).toBeVisible()
+  await page.getByLabel('Affected securities').selectOption('reported_market_cap')
+  await expect(page.getByText(/GOOGL \(MULTI_CLASS_SECURITY\)/)).toBeVisible()
+  if (await page.getByText('SEC issuer diagnostics', { exact: true }).count()) {
+    await page.getByText('SEC issuer diagnostics', { exact: true }).click()
+  }
+  await capture(page, 'data-center-sec-health-1440')
+  await page.getByText('Financial metric coverage', { exact: true }).evaluate(node => node.scrollIntoView({ block: 'center' }))
+  await capture(page, 'data-center-financial-coverage-1440')
   await capture(page, 'data-center-1440')
   await page.getByRole('button', { name: 'Request synchronization' }).click()
   await expect(page.getByRole('group', { name: 'Confirm synchronization' })).toBeVisible()

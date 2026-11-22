@@ -7,7 +7,33 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
-from finlab.analytics.factors import calculate_market_factors
+from finlab.analytics.company import _complete_price_window
+from finlab.analytics.factors import calculate_market_factors, sma200_slope
+from finlab.ingest.calendar import is_session
+
+
+def test_sma200_compares_two_full_blocks_without_extending_the_risk_window():
+    end = date(2026, 11, 20)
+    days = [end - timedelta(days=i) for i in range(700) if is_session(end - timedelta(days=i))]
+    frame = pl.DataFrame(
+        {
+            "date": sorted(days[:400]),
+            "close": [100.0] * 200 + [125.0] * 200,
+            "adjustment_basis": ["yahoo_auto_adjust_false"] * 400,
+            "source": ["yahoo"] * 400,
+        }
+    )
+    assert _complete_price_window(frame, end, 400)
+    assert _complete_price_window(frame.tail(253), end, 253)
+    assert sma200_slope(frame["close"]) == pytest.approx(0.25)
+    assert sma200_slope(frame["close"].tail(253)) is None
+    broken = frame.with_columns(
+        pl.when(pl.col("date") == days[200])
+        .then(pl.lit(days[400]))
+        .otherwise(pl.col("date"))
+        .alias("date")
+    )
+    assert not _complete_price_window(broken, end, 400)
 
 
 def test_market_factors_are_deterministic_and_point_in_time():

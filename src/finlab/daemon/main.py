@@ -225,6 +225,8 @@ class Daemon:
         return enqueue_fn
 
     async def _run_job(self, con: duckdb.DuckDBPyConnection, job: queue.Job) -> None:
+        from finlab.engine.financial_sync import SecSyncIncomplete
+
         handler = HANDLERS.get(job.job_type)
         if handler is None:
             queue.fail(con, job, f"no handler registered for {job.job_type!r}")
@@ -268,6 +270,16 @@ class Daemon:
             queue.defer(con, job, exc.retry_after, str(exc))
             status("retrying", str(exc))
             bound.warning("job deferred", retry_after=exc.retry_after, reason=str(exc))
+        except SecSyncIncomplete as exc:
+            state = queue.fail(
+                con,
+                job,
+                str(exc),
+                terminal=exc.permanent,
+                minimum_delay=exc.retry_after,
+            )
+            status(state, str(exc))
+            bound.warning("SEC verification incomplete", state=state, retry_after=exc.retry_after)
         except Exception as exc:
             state = queue.fail(con, job, f"{type(exc).__name__}: {exc}")
             status(state, str(exc))

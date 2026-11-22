@@ -65,6 +65,7 @@ def test_profitable_multiple_requires_positive_denominator_and_market_value():
     values = calculate_fundamentals(facts, ASOF, market_cap=200)["factors"]
     assert values["trailing_pe"]["value"] is None
     assert values["earnings_yield"]["value"] is None
+    assert values["trailing_pe"]["diagnostic"]["code"] == "INVALID_DENOMINATOR"
 
 
 def test_enterprise_value_requires_all_claims_and_aligned_positive_ebitda():
@@ -101,6 +102,23 @@ def test_reject_wrong_fiscal_start_and_future_restatement():
     assert factors["price_to_fcf"]["value"] is None
 
 
+def test_nonoperating_interest_keeps_its_own_scope_and_publication_cutoff():
+    current = observation("nonoperating_interest_expense", 2021, 5)
+    revision = {**current, "value": 10, "filed_date": date(2022, 4, 1)}
+    facts = [observation("revenue", 2021, 200), observation("operating_income", 2021, 100)]
+    factors = calculate_fundamentals([*facts, current, revision], ASOF)["factors"]
+    assert factors["nonoperating_interest_coverage"]["value"] == 20
+    assert factors["interest_coverage"]["diagnostic"]["code"] == "SOURCE_MISSING"
+    incompatible = {**current, "period_start": date(2021, 1, 15)}
+    factors = calculate_fundamentals([*facts, incompatible], ASOF)["factors"]
+    assert (
+        factors["nonoperating_interest_coverage"]["diagnostic"]["code"]
+        == "INVALID_FISCAL_ALIGNMENT"
+    )
+    financial = calculate_fundamentals([*facts, current], ASOF, financial_issuer=True)["factors"]
+    assert financial["nonoperating_interest_coverage"]["diagnostic"]["code"] == "NOT_APPLICABLE"
+
+
 def test_ttm_requires_four_contiguous_public_quarters():
     facts = []
     starts = [(1, 1), (4, 1), (7, 1), (10, 1)]
@@ -119,6 +137,34 @@ def test_ttm_requires_four_contiguous_public_quarters():
     assert factors["trailing_pe"]["value"] is None
     facts[-1]["filed_date"] = date(2022, 3, 2)
     assert calculate_fundamentals(facts, ASOF, 100)["factors"]["ttm_pe"]["value"] is None
+
+
+def test_ttm_bridge_requires_comparative_ytd_from_the_same_public_filing():
+    fiscal = observation("net_income", 2020, 80, source_tag="NetIncomeLoss")
+    q3_filing = date(2021, 11, 1)
+    current = {
+        **observation("net_income", 2021, 75, "ytd9", "NetIncomeLoss"),
+        "period_end": date(2021, 9, 30),
+        "filed_date": q3_filing,
+        "accession_number": "same",
+    }
+    prior = {
+        **observation("net_income", 2020, 60, "ytd9", "NetIncomeLoss"),
+        "period_end": date(2020, 9, 30),
+        "filed_date": q3_filing,
+        "accession_number": "same",
+    }
+    result = calculate_fundamentals([fiscal, current, prior], ASOF, 190)
+    assert result["factors"]["ttm_pe"]["value"] == 2
+    assert result["ttm_quarter_evidence"] == []
+    assert result["ttm_bridge_evidence"][2]["operation"] == "subtract_prior_ytd"
+    for rejected in (
+        dict(accession_number="other"),
+        dict(filed_date=date(2022, 4, 1)),
+        dict(period_start=date(2020, 2, 1)),
+    ):
+        result = calculate_fundamentals([fiscal, current, {**prior, **rejected}], ASOF, 190)
+        assert result["factors"]["ttm_pe"]["value"] is None
 
 
 def test_roic_and_reported_debt_use_separate_supported_definitions():
@@ -148,3 +194,27 @@ def test_roic_and_reported_debt_use_separate_supported_definitions():
     assert (
         calculate_fundamentals(facts, ASOF)["factors"]["reported_debt_to_assets"]["value"] is None
     )
+
+
+def test_parent_equity_uses_reported_minority_interest_from_same_filing():
+    consolidated = observation(
+        "equity",
+        2021,
+        100,
+        "instant",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    )
+    minority = observation("noncontrolling_interest", 2021, 12, "instant", "MinorityInterest")
+    facts = [
+        observation("revenue", 2021, 200),
+        observation("total_assets", 2021, 300, "instant"),
+        consolidated,
+    ]
+
+    def equity_ratio(rows):
+        return calculate_fundamentals(rows, ASOF)["factors"]["equity_to_assets"]["value"]
+
+    assert equity_ratio(facts) is None
+    assert equity_ratio([*facts, minority]) == pytest.approx(88 / 300)
+    assert equity_ratio([*facts, {**minority, "accession_number": "another"}]) is None
+    assert equity_ratio([*facts, {**minority, "filed_date": date(2022, 3, 2)}]) is None

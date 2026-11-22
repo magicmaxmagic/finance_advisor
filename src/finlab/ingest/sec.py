@@ -12,15 +12,19 @@ changes.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from types import TracebackType
 from typing import Any, Self
 
 import httpx
 from tenacity import (
     AsyncRetrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -33,6 +37,55 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 class SecEtiquetteError(RuntimeError):
     """Refusing to make a request that would violate SEC access rules."""
+
+
+class SecPayloadError(ValueError):
+    """A successful HTTP response did not contain the expected SEC document."""
+
+
+@dataclass(frozen=True)
+class SecFailure:
+    code: str
+    retryable: bool
+    retry_after: float | None = None
+
+
+def retry_after(response: httpx.Response) -> float | None:
+    header = response.headers.get("Retry-After")
+    if not header:
+        return None
+    if header.isascii() and header.isdigit() and len(header) <= 10:
+        return float(header)
+    try:
+        when = parsedate_to_datetime(header)
+        return max(0.0, (when - datetime.now(UTC)).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def sec_failure(exc: Exception) -> SecFailure:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429:
+            return SecFailure("RATE_LIMITED", True, retry_after(exc.response))
+        if status == 408 or 500 <= status < 600:
+            return SecFailure(f"HTTP_{status}", True, retry_after(exc.response))
+        return SecFailure(f"HTTP_{status}", False)
+    if isinstance(exc, httpx.TimeoutException):
+        return SecFailure("TIMEOUT", True)
+    if isinstance(exc, httpx.TransportError):
+        return SecFailure("TRANSPORT_ERROR", True)
+    return SecFailure("INVALID_PAYLOAD", False)
+
+
+def decode_sec_json(body: bytes, cik: int | None = None) -> dict:
+    try:
+        payload = json.loads(body)
+        if not isinstance(payload, dict) or (cik is not None and int(payload["cik"]) != cik):
+            raise ValueError
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        raise SecPayloadError("Invalid SEC JSON or issuer identity") from exc
+    return payload
 
 
 class RateLimiter:
@@ -52,12 +105,12 @@ class RateLimiter:
 
     async def acquire(self) -> None:
         async with self._lock:
-            now = time.monotonic()
-            start_at = max(now, self._next_start)
-            self._next_start = start_at + self._interval
-            delay = start_at - now
-        if delay > 0:
-            await asyncio.sleep(delay)
+            while (delay := self._next_start - time.monotonic()) > 0:
+                await asyncio.sleep(delay)
+            self._next_start = time.monotonic() + self._interval
+
+    def cooldown(self, seconds: float) -> None:
+        self._next_start = max(self._next_start, time.monotonic() + seconds)
 
 
 class SecClient:
@@ -75,6 +128,7 @@ class SecClient:
         self._semaphore = asyncio.Semaphore(self._settings.sec_max_concurrency)
         self._max_attempts = max_attempts
         self._client: httpx.AsyncClient | None = None
+        self._blocked: httpx.HTTPStatusError | None = None
 
     async def __aenter__(self) -> Self:
         self._client = httpx.AsyncClient(
@@ -102,22 +156,41 @@ class SecClient:
         if self._client is None:
             raise RuntimeError("SecClient must be used as an async context manager")
 
+        backoff = wait_exponential(multiplier=1, min=1, max=30)
+
+        def should_retry(exc):
+            failure = sec_failure(exc)
+            return self._blocked is None and failure.retryable and (failure.retry_after or 0) <= 30
+
+        def wait(attempt):
+            failure = sec_failure(attempt.outcome.exception())
+            return max(backoff(attempt), failure.retry_after or 0)
+
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(self._max_attempts),
-            wait=wait_exponential(multiplier=1, min=1, max=30),
-            retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
+            wait=wait,
+            retry=retry_if_exception(should_retry),
             reraise=True,
         ):
             with attempt:
                 async with self._semaphore:
+                    if self._blocked is not None:
+                        raise self._blocked
                     await self._limiter.acquire()
+                    if self._blocked is not None:
+                        raise self._blocked
                     response = await self._client.get(url)
-                if response.status_code == 404:
-                    return None
-                # 429 and 5xx are retried by raising; 4xx others are terminal.
-                if response.status_code == 429 or response.status_code >= 500:
-                    response.raise_for_status()
-                response.raise_for_status()
+                    if response.status_code == 404:
+                        return None
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        failure = sec_failure(exc)
+                        if response.status_code == 429:
+                            self._limiter.cooldown(failure.retry_after or 1)
+                        if response.status_code in {401, 403} or (failure.retry_after or 0) > 30:
+                            self._blocked = exc
+                        raise
                 return response.content
         return None  # pragma: no cover - reraise=True makes this unreachable
 

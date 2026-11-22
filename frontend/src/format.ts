@@ -8,6 +8,8 @@ const metricNames: Record<string, string> = {
   revenue_growth: 'Revenue growth', price_to_sma200: 'Price vs. 200-day average',
   relative_momentum_12m: 'Momentum relative to SPY', annualized_volatility: 'Price volatility',
   max_drawdown: 'Peak-to-trough decline', interest_coverage: 'Interest coverage', current_ratio: 'Current ratio',
+  nonoperating_interest_coverage: 'Nonoperating interest coverage',
+  business_quality: 'Business quality', cash_flow_quality: 'Cash flow quality', growth: 'Revenue growth',
 }
 export const metricName = (key: string) => metricNames[key] ?? key.replaceAll('_', ' ')
 export function classification(n: number | null) {

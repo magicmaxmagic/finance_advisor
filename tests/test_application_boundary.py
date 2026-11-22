@@ -185,3 +185,29 @@ def test_reader_ignores_interrupted_partition_trash(settings):
         )
     with read_conn(settings) as con:
         assert con.execute("SELECT close FROM price_daily").fetchall() == [(100.0,)]
+
+
+def test_evidence_only_publication_freezes_working_core(tmp_path):
+    from finlab.engine.snapshot import EVIDENCE_DATASETS, REQUIRED_DATASETS
+
+    for name in REQUIRED_DATASETS:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "part.parquet").write_bytes(b"verified")
+    base = publish_snapshot(warehouse_dir=tmp_path, schema_version=5)
+    (tmp_path / "entity/part.parquet").write_bytes(b"unverified working values")
+    (tmp_path / "financial_event").mkdir()
+    (tmp_path / "financial_event/part.parquet").write_bytes(b"calendar evidence")
+    snapshot = publish_snapshot(warehouse_dir=tmp_path, schema_version=5, evidence_base=base)
+    assert snapshot.publication_scope == "evidence_only"
+    assert snapshot.base_epoch == base.epoch
+    assert all(
+        snapshot.checksums[key] == base.checksums[key]
+        for key in base.checksums
+        if key not in EVIDENCE_DATASETS
+    )
+    assert (
+        tmp_path / "snapshots" / snapshot.epoch / "entity/part.parquet"
+    ).read_bytes() == b"verified"
+    assert require_valid_snapshot(tmp_path)["epoch"] == snapshot.epoch
+    with pytest.raises(ValueError, match="current immutable"):
+        publish_snapshot(warehouse_dir=tmp_path, schema_version=5, evidence_base=base)

@@ -17,6 +17,7 @@ export function FinancialChart({
   showPriceTools?: boolean; units?: string; comparisonLabel?: string
 }) {
   const container = useRef<HTMLDivElement>(null)
+  const printImage = useRef<HTMLImageElement>(null)
   const [range, setRange] = useState<keyof typeof ranges>(initialRange)
   const [overlays, setOverlays] = useState<Overlay[]>(initialOverlays)
   const [cursor, setCursor] = useState<number | null>(null)
@@ -76,7 +77,22 @@ export function FinancialChart({
     chart.timeScale().fitContent()
     const resize = new ResizeObserver(([entry]) => { if (entry.contentRect.width > 0) chart.resize(entry.contentRect.width,260) })
     resize.observe(target)
-    return () => { resize.disconnect(); chart.remove() }
+    const printMedia = window.matchMedia('print')
+    const captureForPrint = () => {
+      if (printImage.current) printImage.current.src = chart.takeScreenshot().toDataURL('image/png')
+    }
+    const captureOnMediaChange = (event: MediaQueryListEvent) => {
+      if (event.matches) captureForPrint()
+    }
+    window.addEventListener('beforeprint', captureForPrint)
+    printMedia.addEventListener('change', captureOnMediaChange)
+    if (printMedia.matches) captureForPrint()
+    return () => {
+      window.removeEventListener('beforeprint', captureForPrint)
+      printMedia.removeEventListener('change', captureOnMediaChange)
+      resize.disconnect()
+      chart.remove()
+    }
   }, [data, format, units, overlaySeries, overlays])
 
   if (!data.length) return <div className="empty">No published observations for this date.</div>
@@ -95,6 +111,8 @@ export function FinancialChart({
     </div>
     <div className="chart-canvas" ref={container} role="img"
       aria-label={`${label}, ${data.length} observed dates from ${data[0]?.date} to ${data.at(-1)?.date}. Use the session slider for precise values.`} />
+    <img ref={printImage} className="chart-print-image"
+      alt={`${label} from ${data[0]?.date} to ${data.at(-1)?.date}`} />
     <label className="chart-slider">Inspect session<input type="range" min="0" max={data.length-1} value={cursor ?? data.length-1}
       aria-valuetext={`${active?.date}, ${active?.close}`} onChange={event => setCursor(Number(event.target.value))} /></label>
     <div className="segments" aria-label="Chart overlays">{(['SMA20','SMA50','SMA200','SPY','Volume'] as const).map(key =>

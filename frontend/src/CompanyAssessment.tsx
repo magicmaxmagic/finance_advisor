@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { FinancialChart } from './DeferredChart'
 import { pct } from './format'
+import { financialGlossary } from './financialGlossary'
 
 type Contribution = {
   metric: string
@@ -14,6 +15,8 @@ type Contribution = {
   points_from_neutral: number
 }
 
+type Diagnostic = { code: string; message: string }
+
 type Group = {
   score: number | null
   coverage: number
@@ -21,7 +24,7 @@ type Group = {
   missing: string[]
   optional_metrics: string[]
   reason: string | null
-  slots: { required_one_of: string[]; selected: Contribution | null }[]
+  slots: { required_one_of: string[]; selected: Contribution | null; blockers?: Record<string, Diagnostic> }[]
 }
 
 type Comparison = {
@@ -33,7 +36,7 @@ type Comparison = {
   history: { as_of: string; value: number }[]
 }
 
-type FilingEvidence = { canonical: string; source_tag: string; period_start?: string | null; period_end: string; filed_date: string; accession_number: string; value: number }
+type FilingEvidence = { canonical: string; source_tag: string; period_start?: string | null; period_end: string; filed_date: string; accession_number: string; value: number; operation?: string }
 
 export type Assessment = {
   ticker: string
@@ -43,6 +46,12 @@ export type Assessment = {
   warehouse_epoch: string
   reported_share_market_cap?: number | null
   market_cap_inputs?: Record<string, string | number> | null
+  market_cap_diagnostic?: Diagnostic | null
+  share_class_evidence?: {
+    class_member: string; listed_symbol: string | null; shares: number; period_end: string;
+    filed_date: string; value: number | null; reason?: string; source_url: string; accession_number: string
+  }[] | null
+  decision_research?: Record<string, {rule: string; observed: boolean | null}>
   comparisons: Record<string, Comparison>
   financial_context?: {
     history: Record<string,{ observations:number; minimum:number|null; maximum:number|null; median_relation:string; recent_change:number|null; recent_four_minus_earlier_four:number|null }>
@@ -54,18 +63,22 @@ export type Assessment = {
   }
   fundamental_factors: {
     annual_period: string | null
-    factors: Record<string, { value: number | null; status: string; definition: string }>
+    factors: Record<string, { value: number | null; status: string; definition: string; diagnostic?: Diagnostic | null }>
     filing_evidence: FilingEvidence[]
     ttm_quarter_evidence?: FilingEvidence[]
+    ttm_bridge_evidence?: FilingEvidence[]
     limitations?: string[]
   }
-  market_factors: { factor: string; value: number | null; data_status: string; definition: string; source_date: string | null; source: string | null }[]
+  market_factors: { factor: string; value: number | null; data_status: string; definition: string; source_date: string | null; source: string | null; diagnostic?: Diagnostic }[]
   assessment: {
     model_version: string
+    input_version?: string
     opportunity_score: number | null
     fundamental_score: number | null
     technical_score: number | null
     risk_resilience_score: number | null
+    market_risk_score?: number | null
+    financial_risk_score?: number | null
     breakdown: Record<string, Record<string, Group>>
     weights: Record<string, number>
     contributions: Contribution[]
@@ -84,7 +97,7 @@ const groups: Record<string, string[]> = {
   Valuation: ['trailing_pe', 'ttm_pe', 'earnings_yield', 'ttm_earnings_yield', 'ev_to_operating_ebitda', 'ev_to_ebit', 'ev_to_revenue', 'price_to_book', 'price_to_sales', 'price_to_fcf', 'fcf_yield'],
   Profitability: ['roa', 'roe', 'roic', 'gross_margin', 'operating_margin', 'net_margin', 'ebitda_margin'],
   Growth: ['revenue_growth', 'earnings_growth', 'fcf_growth', 'growth_acceleration', 'margin_change', 'earnings_variability'],
-  'Financial health': ['equity_to_assets', 'debt_to_assets', 'reported_debt_to_assets', 'net_debt_to_ebitda', 'debt_to_equity', 'current_ratio', 'cash_to_debt', 'interest_coverage'],
+  'Financial health': ['equity_to_assets', 'debt_to_assets', 'reported_debt_to_assets', 'net_debt_to_ebitda', 'debt_to_equity', 'current_ratio', 'cash_to_debt', 'interest_coverage', 'nonoperating_interest_coverage'],
   'Cash flow': ['cash_flow_quality', 'fcf_margin'],
 }
 
@@ -93,6 +106,7 @@ const names: Record<string, string> = {
   roe: 'Return on equity', roic: 'Return on invested capital', ev_to_operating_ebitda: 'EV / EBITDA',
   fcf_margin: 'Free cash flow margin', fcf_yield: 'Free cash flow yield', price_to_fcf: 'Price / free cash flow',
   price_to_sma200: 'Price vs. 200-day average',
+  nonoperating_interest_coverage: 'Nonoperating interest coverage',
 }
 const plain: Record<string, string> = {
   trailing_pe: 'How much investors pay for each dollar of net income in the latest published fiscal year. Compare with the company’s earlier multiples before judging valuation.',
@@ -114,13 +128,13 @@ function formatIndicator(key: string, value: number | null) {
   if (/^annualized_volatility$|^max_drawdown$|^downside_volatility$|^var_95$|^cvar_95$|^earnings_variability$|^distance_from_52w_high$|^sma200_slope$|^price_to_sma200$|^ttm_earnings_yield$|^momentum_12_minus_1$|^relative_momentum_12m$|^margin_change$|yield$|margin$|growth$|^return_|^ro[ae]$|^roic$|_to_assets$/.test(key)) {
     return `${number(value * 100)}%`
   }
-  if (/^ev_to_|^price_to_|^ttm_pe$|^trailing_pe$|^current_ratio$|^interest_coverage$|^debt_to_equity$|^cash_to_debt$|^net_debt_to_ebitda$|^relative_volume20$/.test(key)) return `${number(value)}×`
+  if (/^ev_to_|^price_to_|^ttm_pe$|^trailing_pe$|^current_ratio$|interest_coverage$|^debt_to_equity$|^cash_to_debt$|^net_debt_to_ebitda$|^relative_volume20$/.test(key)) return `${number(value)}×`
   return number(value)
 }
 
 const views = ['Valuation', 'Business quality', 'Technical', 'Risks', 'Score breakdown', 'Market & events'] as const
 type View = typeof views[number]
-type Metric = { value: number | null; status: string; definition: string; date: string | null; source: string }
+type Metric = { value: number | null; status: string; definition: string; date: string | null; source: string; diagnostic?: Diagnostic | null }
 const marketRisk = ['annualized_volatility','max_drawdown','downside_volatility','beta','var_95','cvar_95','sharpe','sortino']
 const businessKeys = [...groups.Profitability, ...groups.Growth, ...groups['Cash flow']]
 const dependencies: Record<string,string[]> = {
@@ -132,19 +146,20 @@ const dependencies: Record<string,string[]> = {
   roe: ['net_income','equity'], roa: ['net_income','total_assets'],
   revenue_growth: ['revenue'], earnings_growth: ['net_income'], operating_margin: ['operating_income','revenue'],
   current_ratio: ['current_assets','current_liabilities'], interest_coverage: ['operating_income','interest_expense'],
+  nonoperating_interest_coverage: ['operating_income','nonoperating_interest_expense'],
 }
 const focusMetrics: Record<string,string[]> = {
   Valuation: ['trailing_pe','ttm_pe','ev_to_operating_ebitda','ev_to_revenue','price_to_fcf','fcf_yield'],
   'Business quality': ['roic','roe','operating_margin','ebitda_margin','revenue_growth','earnings_growth','fcf_growth','debt_to_assets'],
-  Technical: ['ma50','ma200','price_to_sma200','return_3m','rsi','macd','annualized_volatility','max_drawdown'],
-  Risks: ['annualized_volatility','max_drawdown','beta','net_debt_to_ebitda','debt_to_assets','interest_coverage','current_ratio'],
+  Technical: ['ma50','ma200','price_to_sma200','sma200_slope','return_3m','rsi','macd'],
+  Risks: ['annualized_volatility','max_drawdown','beta','net_debt_to_ebitda','reported_debt_to_assets','interest_coverage','nonoperating_interest_coverage','current_ratio'],
 }
 const valued = (key: string, value: number | null) => formatIndicator(key, value)
 const label = indicatorName
 
 export function CompanyAssessment({ data }: { data: Assessment }) {
   const [view, setView] = useState<View>('Valuation')
-  const [quant, setQuant] = useState(false)
+  const [quant, setQuant] = useState(() => localStorage.getItem('finlab-quant-view') === 'true')
   const [selected, select] = useState<string | null>(null)
   const [all, setAll] = useState(false)
   const [allEvents, setAllEvents] = useState(false)
@@ -165,7 +180,7 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
   const active = selected ? metrics[selected] : undefined
   const comparison = selected ? comparisons[selected] : undefined
   const inputs = selected
-    ? (selected.startsWith('ttm_') ? (facts.ttm_quarter_evidence ?? []) : facts.filing_evidence)
+    ? (selected.startsWith('ttm_') ? [...(facts.ttm_quarter_evidence ?? []), ...(facts.ttm_bridge_evidence ?? [])] : facts.filing_evidence)
       .filter(row => (dependencies[selected] ?? [selected]).includes(row.canonical))
     : []
   const context = data.financial_context
@@ -173,6 +188,14 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
   const peer = selected ? context?.peers.comparisons[selected] : undefined
   const evidence = selected ? context?.predictive_evidence.factors[selected] : undefined
   const contribution = score.contributions.filter(item => item.metric === selected)
+  const distance = market.price_to_sma200?.value
+  const momentum = market.return_3m?.value
+  const relative = market.relative_momentum_12m?.value
+
+  function changeMode(value: boolean) {
+    setQuant(value)
+    localStorage.setItem('finlab-quant-view', String(value))
+  }
 
   useEffect(() => {
     if (selected && dialog.current && !dialog.current.open) dialog.current.showModal()
@@ -182,7 +205,7 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
   const historicalValuation = pe?.historical_percentile != null && pe.historical_median != null ? (
     <>The historical median fiscal-year P/E is <strong>{valued('trailing_pe', pe.historical_median)}</strong>.
       The current multiple is at the <strong>{number(pe.historical_percentile)}th percentile</strong> of its observed history.</>
-  ) : <>Comparable historical P/E observations are unavailable for this cutoff.</>
+  ) : <>{annual.trailing_pe?.diagnostic?.message ?? 'Comparable historical P/E observations are unavailable for this cutoff.'}</>
   const sourceHistory = facts.filing_evidence.filter(row => row.canonical === history && row.period_start)
     .map(row => ({ date: row.period_end, close: row.value })).sort((a,b) => a.date.localeCompare(b.date))
   const periods = new Map(facts.filing_evidence.filter(row => row.canonical === 'capex' && row.period_start)
@@ -195,16 +218,37 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
 
   return <section className="panel v4-evidence">
     <div className="section-heading"><div><h2>Research details</h2><p>Choose a topic, then open any metric to see its evidence.</p></div>
-      <div className="segments" aria-label="Evidence view"><button type="button" aria-pressed={!quant} onClick={() => setQuant(false)}>Simple</button>
-        <button type="button" aria-pressed={quant} onClick={() => setQuant(true)}>Quant</button></div></div>
+      <div className="segments" aria-label="Evidence view"><button type="button" aria-pressed={!quant} onClick={() => changeMode(false)}>Simple</button>
+        <button type="button" aria-pressed={quant} onClick={() => changeMode(true)}>Quant</button></div></div>
     <div className="topic-nav" aria-label="Research topic">{views.map(topic => <button type="button" key={topic} aria-pressed={view === topic}
       onClick={() => { setView(topic); setAll(false) }}>{topic}</button>)}</div>
-    {quant && <p className="epoch-value">{score.model_version} · {score.normalization} {score.weight_status}</p>}
+    {quant && <p className="epoch-value">{score.model_version}{score.input_version && ` · ${score.input_version}`} · {score.normalization} {score.weight_status}</p>}
     {view === 'Valuation' && <div className="v4-context"><strong>Valuation in context</strong><p>{historicalValuation}</p></div>}
-    {view === 'Technical' && <div className="v4-context"><strong>Price behavior</strong><p>Trend and momentum describe recent market conditions. The fundamentals score measures different evidence.</p></div>}
+    {view === 'Valuation' && data.share_class_evidence?.length ? <details className="v4-context">
+      <summary>Why · Share-class evidence</summary>
+      <ul>{data.share_class_evidence.map(item => <li key={item.class_member}>
+        <strong>{item.listed_symbol ?? 'Class without a verified listed symbol'}</strong> · {number(item.shares)} reported shares at {item.period_end}
+        {item.reason && ` · ${item.reason.replaceAll('_', ' ').toLowerCase()}`}
+        {quant && <p>{item.class_member} · filed {item.filed_date} · {item.accession_number}
+          {item.source_url.startsWith('https://www.sec.gov/') && <> · <a href={item.source_url}>SEC filing</a></>}</p>}
+      </li>)}</ul>
+    </details> : null}
+    {view === 'Technical' && <div className="v4-context"><strong>Price behavior</strong><p>
+      {distance == null ? 'The 200-session trend is unavailable.' : distance === 0 ? 'The stock closed at its 200-session average.' : `The close is ${pct(Math.abs(distance))} ${distance < 0 ? 'below' : 'above'} its 200-session average.`}
+      {momentum != null && ` The 63-session price return was ${pct(momentum)}.`}
+      {relative != null && (relative === 0 ? ' Its 252-session price return matched SPY.'
+        : ` Its 252-session price return was ${number(Math.abs(relative) * 100)} percentage points ${relative < 0 ? 'below' : 'above'} SPY.`)}
+      {' '}Use these observations to assess price trends separately from valuation.</p></div>}
     {view === 'Risks' && <div className="v4-context"><strong>Financial risk, market risk and uncertainty</strong>
-      <p>Financial risk reflects the issuer’s balance sheet and interest coverage. Market risk reflects observed price movements.
-        Missing inputs can leave resilience unavailable. Historical model evidence is separate from these measures.</p></div>}
+      <p>Market Risk Score <strong>{number(score.market_risk_score)}</strong> · Financial Risk Score <strong>{number(score.financial_risk_score)}</strong>. Higher scores indicate greater relative resilience.</p>
+      <p>The combined resilience score requires both. See Score breakdown for required measures and comparison counts.</p></div>}
+    {view === 'Risks' && data.decision_research && <div className="v4-context">
+      <strong>Exploratory research checks</strong>
+      <dl className="publication">{Object.entries(data.decision_research).map(([key, result]) =>
+        <div key={key}><dt>{key === 'entry' ? 'Entry conditions' : 'Thesis review'} · {result.observed == null ? 'Unavailable' : result.observed ? 'Observed' : 'Not observed'}</dt>
+          <dd>{result.rule}</dd></div>)}</dl>
+      <p>These conditions are research hypotheses. Portfolio holdings and costs can change the decision.</p>
+    </div>}
     {view === 'Market & events' ? <div className="v4-context">
       <h3>U.S. equity market context</h3>
       {context?.market.status === 'available' ? <p>SPY {context.market.trend} · 12-month price return {pct(context.market.price_return_12m)}
@@ -232,7 +276,14 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
           <p>{number(result.coverage*100)}% required evidence coverage{result.reason && ` · ${result.reason}`}</p>
           {result.slots.map(slot => slot.selected ? <button key={slot.selected.metric} type="button" className="text-button"
             onClick={() => select(slot.selected!.metric)}>{label(slot.selected.metric)} · {number(slot.selected.score)}/100</button>
-            : <p key={slot.required_one_of.join('|')}>Requires {slot.required_one_of.map(label).join(' or ')}</p>)}
+            : <div key={slot.required_one_of.join('|')}><p>Requires {slot.required_one_of.map(label).join(' or ')}</p>
+              <ul>{Object.entries(slot.blockers ?? {}).map(([key, blocker]) => <li key={key}>
+                <strong>{label(key)}</strong> · {blocker.message}{quant && ` (${blocker.code})`}
+              </li>)}</ul></div>)}
+          {quant && result.slots.some(slot => slot.selected && Object.keys(slot.blockers ?? {}).length) && <ul>
+            {result.slots.flatMap(slot => slot.selected ? Object.entries(slot.blockers ?? {}) : []).map(([key, blocker]) =>
+              <li key={key}>{label(key)} · {blocker.message} ({blocker.code})</li>)}
+          </ul>}
           {quant && result.missing.length > 0 && <p>Missing inputs · {result.missing.map(label).join(', ')}</p>}
         </div>)}
       </article>)}
@@ -258,10 +309,13 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
         <div className="section-heading"><h2 id="metric-heading">{label(selected)}</h2>
           <button type="button" onClick={() => dialog.current?.close()}>Close evidence</button></div>
         <strong className="drawer-value">{valued(selected, active.value)}</strong>
-        <p>{plain[selected] ?? active.definition}</p>
-        {active.value == null && <p className="warning">{active.status === 'not_applicable' ? 'This indicator does not apply to the issuer’s business model.' : 'Required inputs, price history, or a supported denominator are unavailable.'}</p>}
+        <p>{financialGlossary[selected]?.meaning ?? plain[selected] ?? active.definition}</p>
+        {active.value == null && <p className="warning">{active.diagnostic?.message ?? (active.status === 'not_applicable' ? 'This indicator does not apply to the issuer’s business model.' : 'Required inputs, price history, or a supported denominator are unavailable.')}
+          {quant && active.diagnostic && ` (${active.diagnostic.code})`}</p>}
         <dl className="publication">
-          <dt>Measurement period</dt><dd>{selected.startsWith('ttm_') ? 'Four reported quarters ending ' + (inputs[0]?.period_end ?? 'at an unavailable date') : active.date ?? 'Unavailable'}</dd>
+          <dt>Measurement period</dt><dd>{selected.startsWith('ttm_')
+            ? (inputs.length ? `Trailing year ending ${inputs[0].period_end} · ${inputs[0].operation ? 'fiscal-year and YTD bridge' : 'four reported quarters'}` : 'Unavailable')
+            : active.date ?? 'Unavailable'}</dd>
           <dt>Source</dt><dd>{active.source}</dd>
           <dt>Assessment cutoff</dt><dd>{data.as_of}</dd>
           {comparison && <><dt>Historical median</dt><dd>{valued(selected, comparison.historical_median)}</dd>
@@ -287,12 +341,12 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
         </div> : <p>{context?.predictive_evidence.status === 'outcomes_after_assessment'
           ? 'The archived study includes outcomes after this cutoff, so its results are withheld here.'
           : 'Direct historical validation evidence is unavailable for this metric.'}</p>}
-        <div className="segments"><button type="button" aria-pressed={!quant} onClick={() => setQuant(false)}>Simple</button>
-          <button type="button" aria-pressed={quant} onClick={() => setQuant(true)}>Quant</button></div>
+        <div className="segments"><button type="button" aria-pressed={!quant} onClick={() => changeMode(false)}>Simple</button>
+          <button type="button" aria-pressed={quant} onClick={() => changeMode(true)}>Quant</button></div>
         {quant && <><h3>Formula and provenance</h3><p>{active.definition}</p>
           <p>{score.normalization} Model {score.model_version} · {data.warehouse_epoch}</p>
           {inputs.length > 0 && <ul>{inputs.slice(0,12).map(input => <li key={`${input.canonical}-${input.period_end}-${input.accession_number}`}>
-            {label(input.canonical)} · {number(input.value)} · {input.period_end} · Filed {input.filed_date} · {input.source_tag} · {input.accession_number}
+            {input.operation && `${label(input.operation)} · `}{label(input.canonical)} · {number(input.value)} · {input.period_end} · Filed {input.filed_date} · {input.source_tag} · {input.accession_number}
           </li>)}</ul>}
           {data.market_cap_inputs && /pe$|yield$|^ev_to_|^price_to_(fcf|book|sales)/.test(selected) &&
             <p>Reported-share market value {number(data.reported_share_market_cap)} USD. Inputs: {Object.entries(data.market_cap_inputs).map(([key,value]) => `${label(key)} ${value}`).join(' · ')}</p>}

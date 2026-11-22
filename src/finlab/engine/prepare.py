@@ -9,11 +9,13 @@ from finlab.core.pit import build_q4_table, install_macros
 from finlab.db.conn import read_conn
 from finlab.db.migrations import current_version
 from finlab.engine.snapshot import publish_snapshot
+from finlab.engine.status import require_sec_ready
 from finlab.ingest.warehouse import publish_table
 
 
 def prepare_warehouse(con: duckdb.DuckDBPyConnection, settings: Settings, as_of):
     """Caller owns writer lock. Never publish when preparation raises."""
+    require_sec_ready(settings.data_dir / "control")
     load_concept_map(con)
     for table in (
         "entity",

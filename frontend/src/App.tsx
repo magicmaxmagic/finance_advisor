@@ -7,6 +7,8 @@ import { Overview, ScoreTiles, Screener, type Discovery } from './MarketViews'
 import { cash, classification, metricName, pct, scoreText } from './format'
 import { StrategyLab, DataCenterControls } from './ResearchTools'
 import { Compare } from './Compare'
+import { ResearchGlossary } from './ResearchGlossary'
+import { FinancialPerformance, type PerformanceData } from './FinancialPerformance'
 
 const ModelValidation = lazy(() => import('./ModelValidation').then(module => ({ default: module.ModelValidation })))
 const Portfolio = lazy(() => import('./Portfolio').then(module => ({ default: module.Portfolio })))
@@ -14,6 +16,7 @@ const Portfolio = lazy(() => import('./Portfolio').then(module => ({ default: mo
 type Company = { ticker: string; name: string }
 type Warehouse = {
   published_at?: string; warehouse_epoch?: string
+  publication_scope?: string; base_epoch?: string
   price_sources?: string[]; last_expected_session?: string; price_current_through_expected?: boolean
   datasets: Record<string, number>; fundamental_range: [string | null, string | null]; price_range: [string | null, string | null]
 }
@@ -69,6 +72,19 @@ function useRequest<T>(url: string | null) {
     retry: () => { setResult(null); retry(n => n + 1) } }
 }
 
+function CompanyFinancialPerformance({ identity, cutoff }: { identity: string; cutoff: string }) {
+  const [open, setOpen] = useState(false)
+  const performance = useRequest<PerformanceData>(open ? `/api/analytics/financial-performance/${encodeURIComponent(identity)}?as_of=${cutoff}` : null)
+  return <section className="panel company-financial-performance" id="company-financial-performance" aria-labelledby="performance-heading">
+    <header><div><h2 id="performance-heading">Financial performance</h2><p>See where revenue goes, how profit changes, and which filings support the numbers.</p></div>
+      <button type="button" aria-expanded={open} aria-controls="company-financial-performance-details" onClick={() => setOpen(!open)}>{open ? 'Hide financial performance' : 'Open financial performance'}</button></header>
+    <div id="company-financial-performance-details" hidden={!open}>
+      {open && (performance.data ? <FinancialPerformance data={performance.data} /> :
+        <Pending message="Loading financial statements and events…" error={performance.error} retry={performance.retry} />)}
+    </div>
+  </section>
+}
+
 function Pending({ message, error, retry }: { message: string; error?: string; retry: () => void }) {
   if (error) return <section className="panel empty" role="alert"><h2>Local data unavailable</h2><p>{error}</p><button type="button" onClick={retry}>Try again</button></section>
   return <div className="panel pending" role="status"><span>{message}</span><div/><div/><div/></div>
@@ -94,6 +110,7 @@ function App() {
   })
   const search = useRef<HTMLInputElement>(null)
   const main = useRef<HTMLElement>(null)
+  const companyChart = useRef<HTMLDivElement>(null)
   const { page, ticker } = locationState
   useEffect(() => {
     const update = () => { setLocationState(readLocation()); setMobile(false); window.scrollTo(0, 0); main.current?.focus({ preventScroll: true }) }
@@ -150,12 +167,17 @@ function App() {
   const valuation = assessment.data?.comparisons.trailing_pe
   const riskCoverage = assessment.data?.assessment.breakdown.risk
   const riskMissing = riskCoverage ? Object.entries(riskCoverage).filter(([,group]) => group.coverage < 1).map(([key]) => metricName(key)) : []
+  const score = assessment.data?.assessment
+  const supportedFundamentals = score && score.fundamental_score == null
+    ? Object.entries(score.breakdown.fundamental)
+      .filter(([, group]) => (group.score ?? 0) > 50)
+      .sort(([, a], [, b]) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 2)
+    : []
   const prices = priceHistory.data?.prices ?? asset.data?.prices ?? []
   const latest = prices.at(-1), prior = prices.at(-2)
   const dailyChange = latest && prior && prior.close > 0 ? latest.close / prior.close - 1 : null
   const dataNeeded = showDiscovery
   const company = asset.data?.company
-  const score = assessment.data?.assessment
   const drivers = score?.positive_contributors ?? []
   const concerns = score?.negative_contributors ?? []
 
@@ -214,6 +236,10 @@ function App() {
         {page === 'Company Research' && asset.data && !asset.data.available && <section className="panel empty"><h2>{ticker}</h2><p>{asset.data.reason}</p><button type="button" onClick={() => navigate('Discover')}>Browse companies</button></section>}
         {page === 'Company Research' && asset.data?.available && <>
           <div className="company-path"><button type="button" className="text-button" onClick={() => navigate('Discover')}>Browse companies</button>
+            <button type="button" className="text-button" onClick={() => {
+              companyChart.current?.focus({ preventScroll: true })
+              companyChart.current?.scrollIntoView({ block: 'start' })
+            }}>View price history</button>
             {compare.length >= 2 && <button type="button" onClick={() => navigate('Compare')}>View comparison · {compare.length}</button>}</div>
           <section className="panel company-heading">
             <div className="company-identity"><span className="ticker-mark">{ticker.slice(0, 2)}</span><div><h2>{company?.name ?? ticker}</h2><p>{ticker} · {company?.sector ?? 'Sector unavailable'}{company?.industry && company.industry !== company.sector ? ` · ${company.industry}` : ''}{company?.exchange ? ` · ${company.exchange}` : ''}</p></div></div>
@@ -225,28 +251,42 @@ function App() {
           </section>
           {assessment.data && score ? <>
             <section className="panel assessment-hero"><div><span className="eyebrow">RESEARCH SCORE</span><h2>Investment opportunity</h2>
-              <div className="hero-score">{scoreText(score.opportunity_score)} <span>/ 100</span></div>
+              <div className="hero-score">{score.opportunity_score == null ? <strong className="score-unavailable">Unavailable</strong>
+                : <>{scoreText(score.opportunity_score)} <span>/ 100</span></>}</div>
               <p>{score.opportunity_score == null ? 'The available evidence does not support a combined score for this date.'
                 : `${classification(score.opportunity_score)}. ${drivers[0] ? `${metricName(drivers[0].metric)} is the largest positive contributor.` : 'Inspect the score breakdown for supporting evidence.'}`}</p>
-              <small>Relative research score · <button className="text-button" type="button" onClick={() => navigate('Model Validation')}>Review predictive evidence</button></small></div>
+              <small>Relative research score <button className="text-button" type="button" onClick={() => navigate('Model Validation')}>· Review predictive evidence</button></small></div>
               <ScoreTiles row={{ fundamental: score.fundamental_score, technical: score.technical_score, risk: score.risk_resilience_score }} breakdown={score.breakdown} />
               <div className="assessment-quick">
                 <div><strong>Valuation</strong><span>{valuation?.historical_percentile != null ? `P/E at historical percentile ${valuation.historical_percentile.toFixed(0)}` : 'Comparable P/E history unavailable'}</span></div>
                 <div><strong>Three-month momentum</strong><span>{momentum == null ? 'Unavailable' : `${momentum > 0 ? 'Up' : momentum < 0 ? 'Down' : 'Flat'} ${pct(Math.abs(momentum))}`}</span></div>
-                <div><strong>Risk evidence</strong><span>{riskMissing.length ? `Coverage gap in ${riskMissing.join(' and ')}` : concerns[0] ? `Review ${metricName(concerns[0].metric)}` : 'See resilience and risk detail'}</span></div>
+                <div><strong>Market Risk Score</strong><span>{scoreText(score.market_risk_score)}{score.market_risk_score != null && ' / 100'}</span></div>
+                <div><strong>Financial Risk Score</strong><span>{scoreText(score.financial_risk_score)}{score.financial_risk_score != null && ' / 100'}</span></div>
               </div>
             </section>
             <h2>What the analysis tells us</h2>
             <div className="evidence-grid">
-              <section className="panel"><h2 className="positive">Strengths</h2>{drivers.length ? <ul>{drivers.map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}</ul> : <p>No positive contributions available.</p>}</section>
-              <section className="panel"><h2 className="warning">Concerns</h2>{concerns.length ? <ul>{concerns.map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}</ul> : <p>No below-midpoint contributions available.</p>}</section>
+              <section className="panel"><h2 className="positive">Strengths</h2>{drivers.length || supportedFundamentals.length ? <ul>
+                {supportedFundamentals.map(([key, group]) => <li key={key}>{metricName(key)} · {scoreText(group.score)}/100 in the evaluated group</li>)}
+                {drivers.slice(0, 3 - supportedFundamentals.length).map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}
+              </ul> : <p>The score groups we can evaluate show no above-midpoint strengths.</p>}</section>
+              <section className="panel"><h2 className="warning">Concerns</h2>
+                {trend != null && trend < 0 && momentum != null && momentum < 0 && <p>The stock closed {pct(Math.abs(trend))} below its 200-session average and fell {pct(Math.abs(momentum))} over 63 sessions.</p>}
+                {assessment.data.market_cap_diagnostic && score.fundamental_score == null && <p>{assessment.data.market_cap_diagnostic.message}</p>}
+                {riskMissing.length > 0 && <p>Risk evidence gap in {riskMissing.join(' and ')}.</p>}
+                {concerns.length > 0 && <ul>{concerns.map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}</ul>}
+                {trend == null && !riskMissing.length && !concerns.length && !assessment.data.market_cap_diagnostic && <p>Review the evidence before drawing a conclusion.</p>}</section>
               <section className="panel"><h2>What to watch</h2>{score.contradictions.length ? score.contradictions.map(item => <p key={item}>{item}</p>)
                 : <p>{trend != null ? `Price is ${pct(Math.abs(trend))} ${trend >= 0 ? 'above' : 'below'} its 200-day average. Watch for a close on the other side of that level.` : 'Trend confirmation needs a full 200-session price window.'}</p>}</section>
             </div>
           </> : <Pending message="Evaluating fundamentals, market conditions, and risk…" error={assessment.error} retry={assessment.retry} />}
-          {assessment.data && <CompanyAssessment key={`evidence-${ticker}`} data={assessment.data} />}
-          <FinancialChart key={`prices-${ticker}`} points={prices} benchmark={priceHistory.data?.benchmark} label="Price history" currency={company?.currency} />
+          <div className="company-price-history" ref={companyChart} tabIndex={-1}>
+            <FinancialChart key={`prices-${ticker}`} points={prices} benchmark={priceHistory.data?.benchmark} label="Price history" currency={company?.currency} />
+          </div>
           {priceHistory.error && <p role="status">Extended history unavailable. Showing recent prices. <button type="button" onClick={priceHistory.retry}>Retry history</button></p>}
+          {identity && <CompanyFinancialPerformance key={`${identity}-${effective}`} identity={identity} cutoff={effective} />}
+          {assessment.data && <CompanyAssessment key={`evidence-${ticker}`} data={assessment.data} />}
+          <ResearchGlossary />
           <details className="panel"><summary>Latest filing and source observations</summary>
             <p>{asset.data.latest_filing ? `${asset.data.latest_filing.form} · filed ${asset.data.latest_filing.filed_date}` : 'No filing available at this cutoff.'}</p>
             <div className="table-wrap"><table><thead><tr><th>Observation</th><th>Period</th><th>Filed</th><th>Value</th></tr></thead>
@@ -262,13 +302,14 @@ function App() {
             <article className="panel" key={key}><span>{({ entity: 'Tracked issuers', filing: 'SEC filings', security: 'Security records', fact: 'Financial observations', price_daily: 'Daily price observations' } as Record<string,string>)[key] ?? key}</span><strong>{count.toLocaleString('en-US')}</strong></article>)}</div>
             : <Pending message="Loading warehouse status…" error={warehouse.error} retry={warehouse.retry} />}
           {warehouse.data && <section className="panel"><h2>Current publication</h2><dl className="publication"><dt>Published</dt><dd>{warehouse.data.published_at ? new Date(warehouse.data.published_at).toLocaleString('en-US') : 'Unavailable'}</dd>
+            {warehouse.data.publication_scope === 'evidence_only' && <><dt>Scope</dt><dd>Share-class and event evidence added. Core data remains pinned to {warehouse.data.base_epoch}.</dd></>}
             <dt>Price freshness</dt><dd>{warehouse.data.price_current_through_expected
               ? `Published through expected session ${warehouse.data.last_expected_session}`
               : warehouse.data.last_expected_session ? `Expected through ${warehouse.data.last_expected_session}` : 'Unavailable'}</dd>
             <dt>Price sources in publication</dt><dd>{warehouse.data.price_sources?.join(', ') || 'Unavailable'}</dd>
             <dt>Price coverage</dt><dd>{warehouse.data.price_range.join(' to ')}</dd><dt>Filing coverage</dt><dd>{warehouse.data.fundamental_range.join(' to ')}</dd>
             <dt>Snapshot epoch</dt><dd>{warehouse.data.warehouse_epoch}</dd></dl></section>}
-          <DataCenterControls publication={warehouse.data?.published_at} />
+          <DataCenterControls publication={warehouse.data?.published_at} asOf={effective || undefined} />
         </>}
       </main>
     </div>

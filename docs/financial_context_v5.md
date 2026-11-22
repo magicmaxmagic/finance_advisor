@@ -4,7 +4,7 @@ The first V5 increment adds company history, current peer comparisons, a
 benchmark regime, and recorded events to Company Research. The descriptive
 Opportunity Score retains the [V2 formulas and version](scoring_v2.md),
 including the configurable 60% fundamental, 25% technical and 15% resilience
-defaults. [The V5 tracker](implementation_plan.md#current-track--v5-quantitative-evidence-and-financial-context)
+defaults. [The V5 tracker](implementation_plan.md#v5-quantitative-evidence-and-financial-context)
 records which research and data extensions are still open.
 
 ## Sources and architecture

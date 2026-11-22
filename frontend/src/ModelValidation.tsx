@@ -8,8 +8,10 @@ type Legacy = { average_ic: number | null; ic_count: number; folds: number; port
 type Evidence = { status: string; label: string; reason: string }
 type Series = { windows: { date:string; ic:number|null; turnover:number|null; available:number|null; matched:number|null }[]
   portfolio: { date:string; wealth:number; benchmark:number; drawdown:number; benchmark_drawdown:number }[]; reason?:string|null }
+type DecisionEvidence = { rule: string; eligible: number; matched: number; flagged: number; windows: Record<string, Statistic> }
+type StudySection = { models: Record<string, Signature>; factors: Record<string, Signature>; decision_evidence?: Record<string, DecisionEvidence> }
 type Result = { headline?: Evidence; model_evidence?: Record<string,Record<string,Evidence>>; universe_count?:number|null
-  params?: { cost_bps:number }; version?: string; model_version?: string; start?: string; end?: string; reason?: string; warehouse_epoch?: string; limitations?: string[]; summary?: Record<string, { models: Record<string, Signature>; factors: Record<string, Signature> } | Record<string, Legacy>> }
+  params?: { cost_bps:number }; version?: string; model_version?: string; start?: string; end?: string; test_start?: string; reason?: string; warehouse_epoch?: string; limitations?: string[]; summary?: Record<string, StudySection | Record<string, Legacy>> }
 
 const value = (n: number | undefined | null) => n == null ? '—' : n.toFixed(3)
 const titles: Record<string, string> = {
@@ -25,36 +27,36 @@ export function ModelValidation() {
   const [report, setReport] = useState<Result | null>(null)
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
+  const [study, setStudy] = useState('v3')
   const [horizon, setHorizon] = useState('21')
   const [chosen, setChosen] = useState('opportunity')
   const [history, setHistory] = useState<{key:string; data?:Series; error?:string}>()
   const [show, setShow] = useState<'equity'|'drawdown'>('equity')
-  const key = `${horizon}/${chosen}`
+  const key = `${study}/${horizon}/${chosen}`
   const activeHistory = history?.key === key ? history : undefined
-  const v3 = report?.version?.startsWith('signal-research-v3')
+  const hasWindows = report?.version?.startsWith('signal-research-')
   useEffect(() => {
-    if (!v3) return
+    if (!hasWindows) return
     const controller = new AbortController()
-    fetch(`/api/analytics/model-validation/series?horizon=${horizon}&series=${encodeURIComponent(chosen)}`,{signal:controller.signal})
+    fetch(`/api/analytics/model-validation/series?study=${study}&horizon=${horizon}&series=${encodeURIComponent(chosen)}`,{signal:controller.signal})
       .then(response => { if (!response.ok) throw Error('Archived series is unavailable.'); return response.json() as Promise<Series> })
       .then(data => { if (!controller.signal.aborted) setHistory({key,data}) })
       .catch(reason => { if (!controller.signal.aborted) setHistory({key,error:String(reason)}) })
     return () => controller.abort()
-  },[v3,horizon,chosen,key])
+  },[hasWindows,study,horizon,chosen,key])
   useEffect(() => {
     const controller = new AbortController()
-    fetch('/api/analytics/model-validation', { signal: controller.signal }).then(response => {
+    fetch(`/api/analytics/model-validation?study=${study}`, { signal: controller.signal }).then(response => {
       if (!response.ok) throw new Error('Could not read the archived validation report.')
       return response.json() as Promise<Result>
     }).then(setReport).catch(reason => { if (!controller.signal.aborted) setError(String(reason)) })
     return () => controller.abort()
-  }, [retry])
+  }, [retry, study])
   if (error) return <section className="panel empty" role="alert"><h2>Validation unavailable</h2><p>{error}</p><button type="button" onClick={() => { setError(''); setRetry(retry + 1) }}>Try again</button></section>
   if (!report) return <section className="panel pending" role="status">Loading archived validation…</section>
   const section = report.summary?.[horizon]
-  const isV3 = report.version?.startsWith('signal-research-v3')
-  const current = isV3 ? section as { models: Record<string, Signature>; factors: Record<string, Signature> } | undefined : undefined
-  const legacy = !isV3 ? section as Record<string,Legacy> | undefined : undefined
+  const current = hasWindows ? section as StudySection | undefined : undefined
+  const legacy = !hasWindows ? section as Record<string,Legacy> | undefined : undefined
   const order = ['opportunity', 'fundamental', 'legacy', 'five_factor', 'spy', 'equal_weight', 'adaptive_oos']
   const priority = (name: string) => order.includes(name) ? order.indexOf(name) : order.length
   const rows = current ? Object.entries(current.models).sort(([a],[b]) => priority(a) - priority(b)) : Object.entries(legacy ?? {}).map(([key,row]) => [key, {
@@ -75,12 +77,16 @@ export function ModelValidation() {
   const turnover = archive?.windows.find(window=>window.turnover != null)?.turnover
   return <>
     <section className="panel validation-lead"><span className="eyebrow">HISTORICAL EVIDENCE</span><h2>Does the scoring model actually work?</h2>
+      <label className="date-control">Validation study<select value={study} onChange={event => {
+        setStudy(event.target.value); setChosen('opportunity'); setReport(null)
+      }}><option value="v3">V3 historical baseline</option><option value="v6">V6 held-out evaluation</option></select></label>
       <strong className={`evidence-chip ${evidence?.status ?? 'insufficient'}`}>{evidence?.label ?? 'Insufficient evidence'}</strong>
       <p>{evidence?.reason ?? 'A dependence-aware study is unavailable for this selection.'}</p>
       <p>Research scores summarize relative valuation, business quality, market conditions, and resilience. Rank IC measures how those ranks related to later returns. The score is not a probability.</p>
       <p className="warning">Surviving-universe study. Historical membership, sector classifications, and delisting settlement coverage are limited.</p>
       {report.reason && <p>{report.reason}</p>}
       {report.warehouse_epoch && <small>{report.version ?? report.model_version} · {report.start} to {report.end}{report.universe_count != null && ` · ${report.universe_count} configured securities`}</small>}
+      {report.test_start && <p>Held-out outcomes begin at the first scheduled observation on or after {report.test_start}. Model selection stops before that boundary.</p>}
       {fees != null && <p>Trading cost {fees} basis points per side{turnover != null && ` · ${pct(turnover)} two-sided turnover per completed window`}.</p>}
     </section>
     {section && <>
@@ -93,10 +99,10 @@ export function ModelValidation() {
         </div>
         <div className="table-wrap" tabIndex={0} aria-label="Model results"><table><thead><tr><th>Model</th><th>Rank IC</th><th>95% interval</th><th>Windows</th><th>Sharpe</th><th>Drawdown</th></tr></thead>
           <tbody>{rows.map(([key,row]) => <tr key={key}><th scope="row">
-            {isV3 ? <button className="text-button" type="button" onClick={() => setChosen(key)}>{titles[key] ?? metricName(key)}</button> : titles[key] ?? metricName(key)}</th>
+            {hasWindows ? <button className="text-button" type="button" onClick={() => setChosen(key)}>{titles[key] ?? metricName(key)}</button> : titles[key] ?? metricName(key)}</th>
             <td>{value(row.ic.mean)}</td><td>{row.ic.confidence_95?.map(value).join(' to ') ?? '—'}</td><td>{row.ic.observations}</td>
             <td>{value(row.portfolio?.sharpe)}</td><td>{pct(row.portfolio?.max_drawdown)}</td></tr>)}</tbody></table></div>
-        {!isV3 && <p>The archived V2 study does not estimate uncertainty. Run Validation V3 to see confidence intervals and factor attribution.</p>}
+        {!hasWindows && <p>The archived V2 study does not estimate uncertainty. Run Validation V3 to see confidence intervals and factor attribution.</p>}
       </section>
       {current && <>
         <section className="panel"><div className="section-heading"><div><h2>Predictive evidence over time</h2><p>{selectedRank}</p></div>
@@ -135,6 +141,17 @@ export function ModelValidation() {
                 <th scope="row">{metricName(regime)}</th><td>{value(outcome.mean)}</td><td>{outcome.observations}</td><td>{outcome.confidence_95?.map(value).join(' to ') ?? '—'}</td>
               </tr>)}</tbody></table></div></details>}
         </section>
+        {current.decision_evidence && <section className="panel"><h2>Entry and thesis review</h2>
+          <p>Independent hypotheses assessed against subsequent outcomes under the same transaction-cost assumption.</p>
+          <div className="table-wrap"><table><thead><tr><th>Condition</th><th>Flagged observations</th><th>Matched coverage</th><th>Net return gap</th><th>95% interval</th><th>False alarms</th></tr></thead>
+            <tbody>{Object.entries(current.decision_evidence).map(([name,row]) => <tr key={name}>
+              <th scope="row">{name === 'entry' ? 'Entry conditions' : 'Thesis review'}<small>{row.rule}</small></th>
+              <td>{row.flagged}</td><td>{row.matched} / {row.eligible}</td>
+              <td>{pct(row.windows.net_difference.mean)}</td><td>{row.windows.net_difference.confidence_95?.map(pct).join(' to ') ?? '—'}</td>
+              <td>{pct(row.windows.false_alarm_share.mean)}</td>
+            </tr>)}</tbody></table></div>
+          <small>Return gap compares flagged with unflagged observations. A false alarm means the flagged stock failed to beat SPY for entry research or failed to lag SPY for thesis review.</small>
+        </section>}
         <section className="panel"><h2>Individual factors</h2>
           <div className="table-wrap" tabIndex={0} aria-label="Factor results"><table><thead><tr><th>Factor</th><th>Mean IC</th><th>Median IC</th><th>95% interval</th><th>Holm p</th><th>Coverage</th></tr></thead>
             <tbody>{Object.entries(current.factors).map(([key,row]) => <tr key={key}>

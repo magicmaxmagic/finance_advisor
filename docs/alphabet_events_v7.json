@@ -1,0 +1,27 @@
+[
+  {
+    "cik": 1652044, "kind": "earnings_call", "label": "Alphabet Q3 2026 earnings call",
+    "event_date": "2026-10-28", "announced_on": "2026-10-06", "status": "confirmed",
+    "source": "Alphabet Investor Relations",
+    "source_url": "https://abc.xyz/investor/news/news-details/2026/Alphabet-Announces-Date-of-Third-Quarter-2026-Financial-Results-Conference-Call-2026-8tpGZsLS6v/",
+    "event_at": "2026-10-28T13:30:00-07:00", "timezone": "America/Los_Angeles",
+    "occurred_on": "2026-10-28",
+    "occurrence_url": "https://abc.xyz/investor/events/event-details/2026/2026-Q3-Earnings-Call-2026-Ujou16CTw9/",
+    "statement_period_end": "2026-09-30"
+  },
+  {
+    "cik": 1652044, "kind": "earnings_release", "label": "Alphabet Q3 2026 earnings announcement",
+    "event_date": "2026-10-28", "announced_on": "2026-10-28", "status": "historical",
+    "source": "SEC EDGAR exhibit 99.1",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000080/googexhibit991q32026.htm",
+    "occurred_on": "2026-10-28",
+    "occurrence_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000080/googexhibit991q32026.htm",
+    "statement_period_end": "2026-09-30"
+  },
+  {
+    "cik": 1652044, "kind": "dividend", "label": "Alphabet common dividend payment date",
+    "event_date": "2026-12-14", "announced_on": "2026-10-28", "status": "confirmed",
+    "source": "SEC EDGAR exhibit 99.1",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000080/googexhibit991q32026.htm"
+  }
+]

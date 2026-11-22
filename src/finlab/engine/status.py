@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,9 +61,37 @@ def write_status(settings_dir: Path, status: IngestionStatus) -> Path:
 def read_status(settings_dir: Path) -> dict:
     target = settings_dir / "status.json"
     if not target.is_file():
-        return {
+        status = {
             "updated_at": None,
             "pipeline_state": "not_started",
             "steps": [],
         }
-    return json.loads(target.read_text())
+    else:
+        status = json.loads(target.read_text())
+    sec = read_sec_checkpoint(settings_dir)
+    last_success = sec.get("last_success_at")
+    stale = not last_success or datetime.now(UTC) - datetime.fromisoformat(
+        last_success
+    ) > timedelta(hours=48)
+    return {**status, "sec_sync": {**sec, "stale": stale}}
+
+
+def read_sec_checkpoint(directory: Path) -> dict:
+    try:
+        return json.loads((directory / "sec-sync.json").read_text())
+    except FileNotFoundError:
+        return {"state": "not_started", "pending": [], "issuer_errors": {}}
+
+
+def write_sec_checkpoint(directory: Path, report: dict) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    temporary = directory / f".sec-sync-{uuid4().hex}.tmp"
+    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    temporary.replace(directory / "sec-sync.json")
+
+
+def require_sec_ready(directory: Path) -> None:
+    if read_sec_checkpoint(directory).get("state") in {"running", "degraded"}:
+        raise RuntimeError(
+            "SEC verification is incomplete; the previous validated warehouse remains current."
+        )

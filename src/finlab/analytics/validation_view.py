@@ -42,8 +42,16 @@ def _load_report(path: Path, revision: int):
     return json.loads(path.read_text())
 
 
-def read_validation(directory: Path):
-    for name in ("validation-v3-latest.json", "score-validation-v2-2020-2022-monthly.json"):
+def read_validation(directory: Path, *, holdout=False):
+    names = (
+        ("validation-v6-latest.json",)
+        if holdout
+        else (
+            "validation-v3-latest.json",
+            "score-validation-v2-2020-2022-monthly.json",
+        )
+    )
+    for name in names:
         path = directory / name
         try:
             revision = path.stat().st_mtime_ns
@@ -71,7 +79,7 @@ def summarize_validation(report: dict) -> dict:
             model: evidence_state(
                 row.get("ic", {}),
                 adjusted.get((horizon, model)),
-                walk_forward=model == "adaptive_oos",
+                walk_forward=bool(report.get("test_start")) or model == "adaptive_oos",
             )
             for model, row in data.get("models", {}).items()
         }
@@ -89,7 +97,7 @@ def summarize_validation(report: dict) -> dict:
 def validation_series(report: dict, horizon: int, series: str) -> dict:
     """Project one archived outcome series and suppress curves with unresolved gaps."""
     windows = report.get("folds", {}).get(str(horizon), [])
-    if not report.get("version", "").startswith("signal-research-v3"):
+    if not report.get("version", "").startswith(("signal-research-v3", "signal-research-v6")):
         return dict(
             windows=[], portfolio=[], reason="Archived window data is unavailable in this report."
         )

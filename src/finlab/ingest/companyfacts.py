@@ -32,13 +32,21 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import httpx
 import polars as pl
 
 from finlab.config import Settings, get_settings
 from finlab.db.conn import parquet_files
 from finlab.db.keys import fact_key_sql
 from finlab.ingest.prices import build_securities
-from finlab.ingest.sec import SecClient, companyfacts_url
+from finlab.ingest.sec import (
+    SecClient,
+    SecFailure,
+    SecPayloadError,
+    companyfacts_url,
+    decode_sec_json,
+    sec_failure,
+)
 from finlab.ingest.universe import Company, load_poc_universe
 from finlab.ingest.warehouse import WriteResult, publish_table, write_partitioned
 
@@ -247,13 +255,13 @@ class FetchReport:
     downloaded: list[int] = field(default_factory=list)
     cached: list[int] = field(default_factory=list)
     missing: list[int] = field(default_factory=list)
+    errors: dict[int, SecFailure] = field(default_factory=dict)
 
 
 def _archive_cached_response(settings: Settings, company: Company, manifest: dict) -> None:
     with gzip.open(raw_path(settings, company.cik), "rb") as handle:
         body = handle.read()
-    if int(json.loads(body).get("cik", -1)) != company.cik:
-        raise IngestError(f"Cached SEC identity mismatch for {company.ticker}")
+    decode_sec_json(body, company.cik)
     digest = hashlib.sha256(body).hexdigest()
     blobs = raw_dir(settings) / "blobs"
     blobs.mkdir(exist_ok=True)
@@ -275,7 +283,10 @@ def _archive_cached_response(settings: Settings, company: Company, manifest: dic
 
 
 async def fetch_poc_universe(
-    companies: Sequence[Company], settings: Settings, *, force: bool = False
+    companies: Sequence[Company],
+    settings: Settings,
+    *,
+    force: bool = False,
 ) -> FetchReport:
     """Download companyfacts for each CIK, skipping ones already on disk."""
     report = FetchReport()
@@ -285,9 +296,13 @@ async def fetch_poc_universe(
     todo: list[Company] = []
     for company in companies:
         if not force and raw_path(settings, company.cik).is_file():
-            _archive_cached_response(settings, company, manifest)
-            report.cached.append(company.cik)
-            continue
+            try:
+                _archive_cached_response(settings, company, manifest)
+            except (SecPayloadError, gzip.BadGzipFile, EOFError):
+                pass
+            else:
+                report.cached.append(company.cik)
+                continue
         todo.append(company)
 
     if not todo:
@@ -297,12 +312,21 @@ async def fetch_poc_universe(
     async with SecClient(settings) as client:
 
         async def one(company: Company) -> None:
-            body = await client.get_bytes(companyfacts_url(company.cik))
-            if body is None:
+            try:
+                body = await client.get_bytes(companyfacts_url(company.cik))
+                if body is None:
+                    report.errors[company.cik] = SecFailure("HTTP_404", False)
+                    report.missing.append(company.cik)
+                    return
+                document = decode_sec_json(body, company.cik)
+                if not isinstance(document.get("facts"), dict):
+                    raise SecPayloadError("Missing SEC facts object")
+                if not any_value_rows(document):
+                    raise SecPayloadError("No valid SEC observations in the payload")
+            except (httpx.HTTPError, SecPayloadError) as exc:
+                report.errors[company.cik] = sec_failure(exc)
                 report.missing.append(company.cik)
                 return
-            if int(json.loads(body).get("cik", -1)) != company.cik:
-                raise IngestError(f"SEC identity mismatch for {company.ticker}")
             target = raw_path(settings, company.cik)
             blobs = raw_dir(settings) / "blobs"
             blobs.mkdir(exist_ok=True)
@@ -335,14 +359,24 @@ async def fetch_poc_universe(
                 "checked_statement_accessions": previous.get("checked_statement_accessions", []),
                 "sha256": hashlib.sha256(body).hexdigest(),
                 "bytes": len(body),
-                "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "fetched_at": datetime.now(UTC).isoformat(),
             }
+            save_manifest(settings, manifest)
             report.downloaded.append(company.cik)
 
         await asyncio.gather(*(one(c) for c in todo))
 
     save_manifest(settings, manifest)
     return report
+
+
+def any_value_rows(document: dict) -> bool:
+    """Validate every observation before replacing the issuer's cached payload."""
+    try:
+        rows = sum(1 for _ in parse_companyfacts(document))
+    except (AttributeError, TypeError, IngestError) as exc:
+        raise SecPayloadError("Malformed SEC Company Facts observations") from exc
+    return rows > 0
 
 
 # ---------------------------------------------------------------------------
@@ -634,9 +668,11 @@ def ingest_poc(
 ) -> IngestReport:
     """Fetch (if needed), parse, verify and publish the PoC universe."""
     cfg = settings or get_settings()
-    companies = load_poc_universe()
+    companies = load_poc_universe(cfg.universe_path)
 
     fetch_report = asyncio.run(fetch_poc_universe(companies, cfg, force=force))
+    if fetch_report.missing:
+        raise IngestError(f"Cannot stage an incomplete SEC universe: {fetch_report.missing}")
 
     rows, stats, names = parse_all(cfg, companies)
     load_report = load_parsed(con, rows, companies, cfg, names)

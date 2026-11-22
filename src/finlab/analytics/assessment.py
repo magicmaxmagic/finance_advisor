@@ -9,11 +9,14 @@ from statistics import correlation, median
 
 from finlab import config
 from finlab.analytics.company import load_benchmark, read_company
+from finlab.analytics.fundamentals import diagnostic
 from finlab.analytics.snapshot import attached_views, published_read_conn, require_valid_snapshot
 from finlab.core.pit import install_macros
 from finlab.ingest.universe import load_poc_universe
+from finlab.research.decision_evidence import RULES, decision_flags
 
-VERSION = "hierarchical-equity-assessment-v2"
+VERSION = "hierarchical-equity-assessment-v2.1"
+INPUT_VERSION = "published-financial-inputs-v7.2"
 DEFAULT_WEIGHTS = {"fundamental": 0.60, "technical": 0.25, "risk": 0.15}
 MIN_COHORT = 8
 # Each tuple is one fixed evidence slot. Alternatives are tried in order and
@@ -32,7 +35,12 @@ GROUPS = {
     "risk": {
         "market_risk": (("annualized_volatility",), ("max_drawdown",)),
         "financial_risk": (
-            ("debt_to_assets", "reported_debt_to_assets", "interest_coverage"),
+            (
+                "debt_to_assets",
+                "reported_debt_to_assets",
+                "interest_coverage",
+                "nonoperating_interest_coverage",
+            ),
             ("current_ratio", "cash_to_debt"),
         ),
     },
@@ -70,6 +78,7 @@ COMPARISONS = (
     "growth_acceleration",
     "current_ratio",
     "interest_coverage",
+    "nonoperating_interest_coverage",
     "net_debt_to_ebitda",
     "debt_to_equity",
     "price_to_fcf",
@@ -105,6 +114,13 @@ def assess(row, cohort, weights=None):
     ):
         raise ValueError("Dimension weights must be finite, nonnegative and sum to one")
     raw = values(row)
+    metric_diagnostics = {
+        **{
+            key: metric.get("diagnostic")
+            for key, metric in row["fundamental_factors"]["factors"].items()
+        },
+        **{metric["factor"]: metric.get("diagnostic") for metric in row["market_factors"]},
+    }
     samples = defaultdict(list)
     for peer in cohort:
         if not peer["eligible"] or peer["financial_issuer"] != row["financial_issuer"]:
@@ -131,12 +147,30 @@ def assess(row, cohort, weights=None):
             evidence = []
             for alternatives in slots:
                 chosen = None
+                blockers = {}
                 for key in alternatives:
                     value = raw.get(key)
                     sample = samples[key]
-                    if value is None or not isfinite(value) or len(sample) < MIN_COHORT:
+                    if value is None or not isfinite(value):
+                        blockers[key] = metric_diagnostics.get(key) or diagnostic(
+                            "SOURCE_MISSING", "The required measure is unavailable."
+                        )
                         continue
                     if key not in row["fundamental_factors"]["factors"] and not row["market_ready"]:
+                        blockers[key] = diagnostic(
+                            "INSUFFICIENT_HISTORY",
+                            "The price window is incomplete or incompatible.",
+                        )
+                        continue
+                    if len(sample) < MIN_COHORT:
+                        blockers[key] = {
+                            **diagnostic(
+                                "INSUFFICIENT_PEERS",
+                                f"{len(sample)} comparable observations; {MIN_COHORT} are required.",
+                            ),
+                            "observations": len(sample),
+                            "minimum": MIN_COHORT,
+                        }
                         continue
                     rank = percentile(value, sample)
                     chosen = dict(
@@ -148,7 +182,9 @@ def assess(row, cohort, weights=None):
                         direction="lower" if key in LOWER else "higher",
                     )
                     break
-                evidence.append(dict(required_one_of=alternatives, selected=chosen))
+                evidence.append(
+                    dict(required_one_of=alternatives, selected=chosen, blockers=blockers)
+                )
             selected = [slot["selected"] for slot in evidence if slot["selected"] is not None]
             score = (
                 sum(item["score"] for item in selected) / len(slots)
@@ -165,7 +201,8 @@ def assess(row, cohort, weights=None):
                 optional_metrics=OPTIONAL_RISK.get(name, ()),
                 reason=None
                 if score is not None
-                else "Required evidence, comparable observations, or complete price history unavailable.",
+                else "One or more required evidence slots could not be evaluated.",
+                reason_code=None if score is not None else "INCOMPLETE_SCORE_GROUP",
             )
             groups[dimension][name] = score
         group_scores = groups[dimension].values()
@@ -231,10 +268,25 @@ def assess(row, cohort, weights=None):
         contradictions.append("Strong relative revenue growth with negative free cash flow margin.")
     return dict(
         model_version=VERSION,
+        input_version=INPUT_VERSION,
         opportunity_score=overall,
         fundamental_score=fundamental,
         technical_score=technical,
         risk_resilience_score=dimensions["risk"],
+        market_risk_score=groups["risk"]["market_risk"],
+        financial_risk_score=groups["risk"]["financial_risk"],
+        score_diagnostics={
+            score_field: {
+                **diagnostic("INCOMPLETE_SCORE_GROUP", "Every required group must be available."),
+                "groups": [group for group, value in groups[dimension].items() if value is None],
+            }
+            for dimension, score_field in (
+                ("fundamental", "fundamental_score"),
+                ("technical", "technical_score"),
+                ("risk", "risk_resilience_score"),
+            )
+            if dimensions[dimension] is None
+        },
         weights=weights,
         score_groups=groups,
         breakdown=breakdown,
@@ -292,7 +344,7 @@ def cohort_at(epoch, as_of, universe_ids, warehouse_dir, filing_cutoff=None):
         market = con.execute(
             """SELECT security_id,date,close,high,low,volume,adjustment_basis,source FROM price_daily
             WHERE security_id IN (SELECT unnest(?)) AND date<=?
-            QUALIFY row_number() OVER (PARTITION BY security_id ORDER BY date DESC)<=253""",
+            QUALIFY row_number() OVER (PARTITION BY security_id ORDER BY date DESC)<=400""",
             [list(universe_ids), as_of],
         ).pl()
         price_frames = market.partition_by("security_id", as_dict=True)
@@ -340,6 +392,35 @@ def company_assessment(identity: str, as_of: date, *, weights=None, comparisons=
             row["eligible"] = False
         else:
             row = dict(matches[0])
+        interest = row["fundamental_factors"]["factors"]["nonoperating_interest_coverage"]
+        annual_period = row["fundamental_factors"]["annual_period"]
+        if (
+            interest["value"] is None
+            and interest["status"] != "not_applicable"
+            and annual_period
+            and "fact" in attached_views(con)
+            and con.execute(
+                """SELECT EXISTS (
+                    SELECT 1 FROM fact f JOIN security s USING(cik)
+                    WHERE s.security_id=? AND f.period_end=? AND f.filed_date<=?
+                      AND f.taxonomy='us-gaap' AND f.tag='InterestExpenseNonoperating'
+                      AND f.duration_bucket='annual' AND f.unit='USD'
+                      AND NOT EXISTS (SELECT 1 FROM concept_map c
+                        WHERE c.tag=f.tag AND c.taxonomy=f.taxonomy
+                          AND f.filed_date BETWEEN c.valid_from AND c.valid_to)
+                )""",
+                [row["security_id"], annual_period, as_of],
+            ).fetchone()[0]
+        ):
+            metrics = row["fundamental_factors"]["factors"].copy()
+            metrics["nonoperating_interest_coverage"] = {
+                **interest,
+                "diagnostic": diagnostic(
+                    "MAPPING_MISSING",
+                    "This snapshot includes the SEC tag but its concept map does not normalize it.",
+                ),
+            }
+            row["fundamental_factors"] = {**row["fundamental_factors"], "factors": metrics}
         row["assessment"] = assess(
             row, cohort, config.get_settings().assessment_weights if weights is None else weights
         )
@@ -347,6 +428,15 @@ def company_assessment(identity: str, as_of: date, *, weights=None, comparisons=
             "captured_membership" if captured else "current_seed_survivorship_bias"
         )
         row["comparisons"] = historical_comparisons(con, row, as_of) if comparisons else {}
+        raw = values(row)
+        observed = decision_flags(
+            row["assessment"]["fundamental_score"],
+            raw.get("price_to_sma200") if row["market_ready"] else None,
+            raw.get("margin_change"),
+        )
+        row["decision_research"] = {
+            key: {"rule": RULES[key], "observed": value} for key, value in observed.items()
+        }
         from finlab.analytics.financial_context import financial_context
 
         row["financial_context"] = financial_context(con, row, as_of, cohort)

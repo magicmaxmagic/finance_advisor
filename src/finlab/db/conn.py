@@ -46,6 +46,8 @@ WAREHOUSE_DATASETS: tuple[str, ...] = (
     "corporate_action",
     "price_ingestion",
     "ticker_history",
+    "share_class_fact",
+    "financial_event",
 )
 
 

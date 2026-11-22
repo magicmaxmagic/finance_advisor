@@ -138,12 +138,30 @@ export function PortfolioPanel() {
 }
 
 type Job = { name:string; state:string; detail:string; finished_at?:string|null; started_at?:string|null }
-type EngineState = { updated_at:string|null; pipeline_state:string; steps:Job[]; recent_jobs?:Job[] }
+type EngineState = { updated_at:string|null; pipeline_state:string; steps:Job[]; recent_jobs?:Job[];
+  sec_sync?: { state: string; stale: boolean; last_success_at?: string | null;
+    pending: { cik: number; ticker: string; accession: string; filed_date: string; reason?: string; report_period?: string; inline_xbrl?: boolean }[];
+    issuer_errors: Record<string, { code: string; retryable: boolean }> } }
 type QualityState = { scope: string; rows: { ticker: string; status: string; missing_sessions?: string[] }[] }
+type FinancialMetricCoverage = { available: number; coverage_pct: number|null; main_missing_reason: string|null;
+  source: string; structurally_unavailable_at_cutoff: number; unresolved_or_conditionally_recoverable: number;
+  affected_securities: { ticker: string; security_id: string; reason: string }[] }
+type FinancialCoverage = { samples: Record<string, { business_models: Record<string, { eligible: number; metric_coverage: Record<string, FinancialMetricCoverage> }> }> }
+const auditedMeasures = {
+  annual_statement: 'Annual statements', reported_shares: 'Reported share counts', reported_market_cap: 'Historical market capitalization',
+  trailing_pe: 'Fiscal-year P/E', ev_to_operating_ebitda: 'EV / EBITDA', roic: 'Return on invested capital',
+  fcf_yield: 'Free cash flow yield', revenue_growth: 'Revenue growth', earnings_growth: 'Earnings growth',
+  debt_to_equity: 'Debt / equity', interest_coverage: 'Interest coverage',
+  nonoperating_interest_coverage: 'Nonoperating interest coverage', current_ratio: 'Current ratio',
+  fundamental_score: 'Fundamental Score', market_risk_score: 'Market Risk Score', financial_risk_score: 'Financial Risk Score',
+  opportunity_score: 'Opportunity Score',
+}
 
-export function DataCenterControls({ publication }: { publication?: string }) {
+export function DataCenterControls({ publication, asOf }: { publication?: string; asOf?: string }) {
   const [status, setStatus] = useState<EngineState | null>(null)
   const [quality, setQuality] = useState<QualityState | null>(null)
+  const [financial, setFinancial] = useState<FinancialCoverage | null>(null)
+  const [selectedMetric, setSelectedMetric] = useState<keyof typeof auditedMeasures>('opportunity_score')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState(false)
@@ -158,10 +176,21 @@ export function DataCenterControls({ publication }: { publication?: string }) {
   async function inspect() {
     setBusy(true); setMessage('')
     try {
-      const responses = await Promise.all([fetch('/api/data/status'), fetch('/api/warehouse/quality')])
-      if (!responses.every(response => response.ok)) throw new Error('Published quality details are unavailable.')
-      const [engine,coverage] = await Promise.all(responses.map(response => response.json()))
-      setStatus(engine); setQuality(coverage)
+      const cutoff = asOf ? `?as_of=${encodeURIComponent(asOf)}` : ''
+      const responses = await Promise.allSettled([
+        fetch('/api/data/status'), fetch(`/api/warehouse/quality${cutoff}`),
+        fetch(`/api/warehouse/financial-coverage${cutoff}`),
+      ])
+      for (const [index, response] of responses.entries()) {
+        if (response.status === 'rejected' || !response.value.ok) {
+          setMessage('Some coverage details are unavailable.')
+          continue
+        }
+        const data = await response.value.json()
+        if (index === 0) setStatus(data)
+        if (index === 1) setQuality(data)
+        if (index === 2) setFinancial(data)
+      }
     } catch (reason) { setMessage(String(reason)) }
     finally { setBusy(false) }
   }
@@ -176,6 +205,10 @@ export function DataCenterControls({ publication }: { publication?: string }) {
   const statusText = !state ? 'Status unavailable' : state === 'not_started' ? 'No sync status yet'
     : needsAttention ? 'Needs attention' : state === 'running' ? 'Working' : state === 'done' ? 'Completed' : state.replaceAll('_',' ')
   const jobs = status?.recent_jobs ?? []
+  const sec = status?.sec_sync
+  const [financialDate, sample] = Object.entries(financial?.samples ?? {})[0] ?? []
+  const metrics = sample?.business_models.all.metric_coverage
+  const affected = metrics?.[selectedMetric]
   const successful = [...jobs,...(status?.steps ?? [])].filter(step => step.state === 'done' && ['prices','price_corrections'].includes(step.name))
     .map(step=>step.finished_at).filter(Boolean).sort().at(-1)
   return <section className="panel"><h2>Synchronization health</h2>
@@ -184,6 +217,17 @@ export function DataCenterControls({ publication }: { publication?: string }) {
         : publication ? `Latest successful warehouse publication ${new Date(publication).toLocaleString('en-US')}.` : 'No successful job timestamp is available.'}</p>
       {needsAttention && <p>Open job details to see what prevented the most recent update. The last validated publication remains available.</p>}
     </div>
+    {sec && <div className="v4-context">
+      <strong>SEC statements</strong>
+      <p>{sec.last_success_at ? `Last verified SEC synchronization ${new Date(sec.last_success_at).toLocaleString('en-US')}.` : 'No verified SEC synchronization has been recorded.'}
+        {sec.stale && ' The verification status is stale.'}</p>
+      <p>{sec.pending.length} pending statements · {Object.keys(sec.issuer_errors).length} issuer errors.</p>
+      {(sec.pending.length > 0 || Object.keys(sec.issuer_errors).length > 0) && <details><summary>SEC issuer diagnostics</summary>
+        <ul>{sec.pending.map(item => <li key={item.accession}>{item.ticker} · filed {item.filed_date}{item.report_period && ` · period ended ${item.report_period}`} · {item.accession}
+          {item.inline_xbrl && ' · Inline XBRL confirmed'} · {item.reason === 'ACCESSION_MISSING_IN_COMPANY_FACTS' ? 'No normalized observations for this accession in SEC Company Facts' : item.reason ?? 'Awaiting verification'}</li>)}
+          {Object.entries(sec.issuer_errors).map(([cik, failure]) => <li key={cik}>{cik} · {failure.code} · {failure.retryable ? 'Retryable' : 'Requires attention'}</li>)}</ul>
+      </details>}
+    </div>}
     <p>{status ? `Status checked ${status.updated_at ? new Date(status.updated_at).toLocaleString('en-US') : 'No status timestamp'}` : 'Loading Data Engine status…'}</p>
     <div className="toolbar"><button type="button" disabled={busy} onClick={inspect}>Inspect coverage</button>
       <button type="button" className="primary" disabled={busy || confirm} onClick={() => setConfirm(true)}>Request synchronization</button></div>
@@ -197,6 +241,20 @@ export function DataCenterControls({ publication }: { publication?: string }) {
           <td>{job.finished_at ? new Date(job.finished_at).toLocaleString('en-US') : '—'}</td><td>{job.state}</td><td className="screener-evidence">{job.detail}</td></tr>)}</tbody>
       </table></div> : <p>Job history appears as the current Data Engine publishes completed attempts.</p>}
     </details>
+    {metrics && <details open><summary>Financial metric coverage</summary>
+      <p>{financialDate} · {sample.business_models.all.eligible} eligible securities from the published warehouse</p>
+      <div className="table-wrap"><table><thead><tr><th>Measure</th><th>Available</th><th>Structural</th><th>Input gaps</th><th>Main reason</th></tr></thead>
+        <tbody>{Object.entries(auditedMeasures).map(([key, name]) => {
+          const item = metrics[key]
+          return item ? <tr key={key}><th scope="row">{name}</th><td>{item.available}</td>
+            <td>{item.structurally_unavailable_at_cutoff}</td><td>{item.unresolved_or_conditionally_recoverable}</td>
+            <td>{item.main_missing_reason ?? '—'}</td></tr> : null
+        })}</tbody></table></div>
+      <label>Affected securities <select value={selectedMetric} onChange={event => setSelectedMetric(event.target.value as keyof typeof auditedMeasures)}>
+        {Object.entries(auditedMeasures).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+      </select></label>
+      {affected && <p>{affected.source} · {affected.affected_securities.map(item => `${item.ticker} (${item.reason})`).join(', ') || 'No missing observations.'}</p>}
+    </details>}
     {quality && <details open><summary>Security coverage</summary><p>{quality.scope}</p>
       <div className="table-wrap"><table><thead><tr><th>Ticker</th><th>State</th><th>Missing sessions</th></tr></thead>
         <tbody>{quality.rows.map(row => <tr key={row.ticker}><th scope="row">{row.ticker}</th><td>{row.status}</td><td>{row.missing_sessions?.length ?? '—'}</td></tr>)}</tbody>

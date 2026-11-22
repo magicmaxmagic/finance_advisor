@@ -22,6 +22,17 @@ REQUIRED_DATASETS = (
     "fundamentals_q4",
     "metric",
 )
+OPTIONAL_DATASETS = (
+    "fact",
+    "price_daily",
+    "universe_snapshot",
+    "corporate_action",
+    "price_ingestion",
+    "ticker_history",
+    "share_class_fact",
+    "financial_event",
+)
+EVIDENCE_DATASETS = {"share_class_fact", "financial_event"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +43,8 @@ class WarehouseSnapshot:
     published_at: str
     dataset_status: dict[str, str]
     checksums: dict[str, str]
+    base_epoch: str | None = None
+    publication_scope: str = "full"
 
 
 def _tree_checksum(root: Path) -> str:
@@ -77,25 +90,32 @@ def publish_snapshot(
     *,
     warehouse_dir: Path,
     schema_version: int,
+    evidence_base: WarehouseSnapshot | None = None,
 ) -> WarehouseSnapshot:
     """Atomically publish a manifest for a completed warehouse epoch."""
     now = datetime.now(UTC)
     epoch = now.strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex
+    manifests = warehouse_dir / "snapshots"
+    dataset_roots = {
+        name: warehouse_dir / name for name in (*REQUIRED_DATASETS, *OPTIONAL_DATASETS)
+    }
+    if evidence_base:
+        if evidence_base != read_latest_snapshot(warehouse_dir):
+            raise ValueError("Evidence publication must extend the current immutable epoch.")
+        base_root = manifests / evidence_base.epoch
+        if any(
+            _tree_checksum(base_root / name) != digest
+            for name, digest in evidence_base.checksums.items()
+        ):
+            raise ValueError("Evidence publication requires an intact base epoch.")
+        for name, root in dataset_roots.items():
+            if name not in EVIDENCE_DATASETS or not root.is_dir():
+                dataset_roots[name] = base_root / name
     dataset_status = {
-        name: "ready" if (warehouse_dir / name).is_dir() else "missing"
-        for name in (
-            *REQUIRED_DATASETS,
-            "fact",
-            "price_daily",
-            "universe_snapshot",
-            "corporate_action",
-            "price_ingestion",
-            "ticker_history",
-        )
+        name: "ready" if root.is_dir() else "missing" for name, root in dataset_roots.items()
     }
     # The caller holds the warehouse writer lock throughout copying and publication.
     # Copies intentionally avoid hard links: a working file may later be overwritten.
-    manifests = warehouse_dir / "snapshots"
     manifests.mkdir(parents=True, exist_ok=True)
     staging = manifests / f".{epoch}.staging"
     destination = manifests / epoch
@@ -104,13 +124,19 @@ def publish_snapshot(
         for name, status in dataset_status.items():
             if status == "ready":
                 (staging / name).mkdir()
-                for source in parquet_files(warehouse_dir / name):
+                root = dataset_roots[name]
+                for source in parquet_files(root):
                     _publish_file(
                         source,
-                        staging / name / source.relative_to(warehouse_dir / name),
+                        staging / name / source.relative_to(root),
                         manifests / ".objects",
                     )
         checksums = {name: _tree_checksum(staging / name) for name in dataset_status}
+        if evidence_base and any(
+            key not in EVIDENCE_DATASETS and checksums.get(key) != digest
+            for key, digest in evidence_base.checksums.items()
+        ):
+            raise ValueError("Evidence publication changed a frozen base dataset.")
         staging.replace(destination)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -121,6 +147,8 @@ def publish_snapshot(
         published_at=now.isoformat(),
         dataset_status=dataset_status,
         checksums=checksums,
+        base_epoch=evidence_base.epoch if evidence_base else None,
+        publication_scope="evidence_only" if evidence_base else "full",
     )
 
     manifests = warehouse_dir / "snapshots"
