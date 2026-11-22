@@ -1,222 +1,242 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import { CompanyAssessment, type Assessment } from './CompanyAssessment'
+import { FinancialChart, type Point } from './FinancialChart'
+import { Overview, ScoreTiles, Screener, type Discovery } from './MarketViews'
+import { cash, classification, metricName, pct, scoreText } from './format'
 import { StrategyLab, PortfolioPanel, DataCenterControls } from './ResearchTools'
+import { ModelValidation } from './ModelValidation'
 
-type Company = { cik: number; ticker: string; name: string; sector: string }
-type WarehouseStatus = {
-  published_at?: string
-  warehouse_epoch?: string
-  price_label?: string
-  datasets: { entity: number; filing: number; security: number; fact: number; price_daily: number }
-  fundamental_range: [string | null, string | null]
-  price_range: [string | null, string | null]
+type Company = { ticker: string; name: string }
+type Warehouse = {
+  published_at?: string; warehouse_epoch?: string
+  datasets: Record<string, number>; fundamental_range: [string | null, string | null]; price_range: [string | null, string | null]
 }
-type Ranking = {
-  ticker: string
-  name: string
-  sector: string
-  currency: string
-  price: number | null
-  earnings_yield: number | null
-  momentum_12m: number | null
-  momentum_3m: number | null
-  momentum_1m: number | null
-  volatility: number | null
-  max_drawdown: number
-  revenue: number | null
-  score: number | null
-  category: string
-  data_status: string
-  price_date?: string
-  factor_scores?: Record<string, number | null>
-  factor_weights?: Record<string, number>
-  normalization?: Record<string, string>
+type Asset = {
+  ticker: string; as_of: string; available: boolean; reason?: string
+  company?: { name: string; sector: string | null; currency: string | null; exchange: string | null; security_id: string }
+  latest_filing?: { form: string; filed_date: string; primary_doc_url: string | null }
+  prices: Point[]
+  facts: { tag: string; unit: string; value: number; filed_date: string; period_end: string; duration_bucket: string }[]
 }
-type Rankings = { as_of: string; method: string; rows: Ranking[]; freshness?: { status: string } }
-type Assessment = { assessment: { model_version:string; opportunity_score:number|null; fundamental_score:number|null; technical_score:number|null; risk_resilience_score:number|null; weights:Record<string,number>; score_groups:Record<string,Record<string,number|null>>; contradictions:string[]; explanations:string[]; options_context:{status:string;reason:string}; weight_status:string }; fundamental_factors:{as_of:string;factors:Record<string,{value:number|null;status:string;definition:string}>}; market_factors:{factor:string;value:number|null;data_status:string}[]; warehouse_epoch:string }
-type WarehouseAsset = {
-  ticker: string
-  available: boolean
-  as_of?: string
-  reason?: string
-  company?: { cik: number; name: string; sector: string; currency: string | null; exchange: string | null }
-  latest_filing?: { accession_number: string; form: string; filed_date: string; primary_doc_url: string | null } | null
-  facts: Array<{ taxonomy: string; tag: string; unit: string; period_end: string; duration_bucket: string; value: number; filed_date: string }>
-  prices: Array<{ date: string; close: number; volume: number | null; source: string | null }>
+const navigation = [
+  { title: 'Research', pages: [['Overview', '◫'], ['Discover', '◈'], ['Company Research', '◎'], ['Model Validation', '≋'], ['Strategies', '↗']] },
+  { title: 'Personal', pages: [['Portfolio', '◧'], ['Watchlist', '☆']] },
+  { title: 'Operations', pages: [['Data Center', '▤']] },
+] as const
+type Page = typeof navigation[number]['pages'][number][0]
+const slug = (page: Page) => page.toLowerCase().replaceAll(' ', '-')
+const titles: Record<Page, string> = {
+  Overview: 'Market overview', Discover: 'Discover companies', 'Company Research': 'Company research',
+  'Model Validation': 'Model validation', Strategies: 'Strategy lab', Portfolio: 'Portfolio',
+  Watchlist: 'Watchlist', 'Data Center': 'Data Center',
 }
 
-const percent = (value: number | null) => value == null ? '—' : `${(value * 100).toFixed(1)}%`
-const money = (value: number | null) => value == null ? '—' : `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+function readLocation(): { page: Page; ticker: string } {
+  const [path, ticker] = location.hash.slice(1).split('/')
+  const page = navigation.flatMap(group => group.pages.map(item => item[0])).find(item => slug(item) === path) ?? 'Overview'
+  return { page, ticker: ticker && /^[A-Z0-9.-]{1,18}$/i.test(ticker) ? ticker.toUpperCase() : 'AAPL' }
+}
 
-async function readLocal<T>(url: string): Promise<T> {
-  const response = await fetch(url)
-  const payload = await response.json()
-  if (!response.ok) throw new Error(payload.detail ?? 'Données locales indisponibles.')
-  return payload as T
+async function request<T>(url: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { detail?: unknown }
+    throw new Error(typeof body.detail === 'string' ? body.detail : `Local service returned HTTP ${response.status}.`)
+  }
+  return await response.json() as T
+}
+
+function useRequest<T>(url: string | null) {
+  const [result, setResult] = useState<{ url: string; data?: T; error?: string } | null>(null)
+  const [attempt, retry] = useState(0)
+  useEffect(() => {
+    if (!url) return
+    const controller = new AbortController()
+    request<T>(url, controller.signal).then(
+      data => { if (!controller.signal.aborted) setResult({ url, data }) },
+      error => { if (!controller.signal.aborted) setResult({ url, error: String(error.message ?? error) }) },
+    )
+    return () => controller.abort()
+  }, [url, attempt])
+  const match = result?.url === url ? result : null
+  return { data: match?.data, error: match?.error,
+    retry: () => { setResult(null); retry(n => n + 1) } }
+}
+
+function Pending({ message, error, retry }: { message: string; error?: string; retry: () => void }) {
+  if (error) return <section className="panel empty" role="alert"><h2>Local data unavailable</h2><p>{error}</p><button type="button" onClick={retry}>Try again</button></section>
+  return <div className="panel pending" role="status"><span>{message}</span><div/><div/><div/></div>
 }
 
 function App() {
-  const [companies, setCompanies] = useState<Company[]>([])
-  const [rankings, setRankings] = useState<Rankings | null>(null)
-  const [warehouse, setWarehouse] = useState<WarehouseStatus | null>(null)
-  const [selected, setSelected] = useState('AAPL')
-  const [asset, setAsset] = useState<WarehouseAsset | null>(null)
-  const [assessment, setAssessment] = useState<Assessment | null>(null)
-  const [quantMode, setQuantMode] = useState(false)
-  const [page, setPage] = useState<'Overview' | 'Ranking' | 'Company' | 'Data' | 'Strategy Lab' | 'Portfolio'>('Ranking')
-  const [sector, setSector] = useState('Tous')
+  const [locationState, setLocationState] = useState(readLocation)
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('finlab-nav-compact') === 'true')
+  const [mobile, setMobile] = useState(false)
+  const [cutoff, setCutoff] = useState(() => {
+    const value = new URLSearchParams(location.search).get('as_of')
+    return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : ''
+  })
   const [query, setQuery] = useState('')
-  const [error, setError] = useState('')
-  const [rankingDate, setRankingDate] = useState('')
-  const [riskMax, setRiskMax] = useState('')
-  const [yieldMin, setYieldMin] = useState('')
-  const [momentumMin, setMomentumMin] = useState('')
-
+  const [watchlist, setWatchlist] = useState<string[]>(() => {
+    try { const saved: unknown = JSON.parse(localStorage.getItem('finlab-watchlist') ?? '[]'); return Array.isArray(saved) ? saved.filter(v => typeof v === 'string') : [] }
+    catch { return [] }
+  })
+  const search = useRef<HTMLInputElement>(null)
+  const main = useRef<HTMLElement>(null)
+  const { page, ticker } = locationState
   useEffect(() => {
-    Promise.all([
-      readLocal<{ companies: Company[] }>('/api/universe'),
-      readLocal<WarehouseStatus>('/api/warehouse/status'),
-    ]).then(([universe, warehouseData]) => {
-      setCompanies(universe.companies)
-      setWarehouse(warehouseData)
-    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Données locales indisponibles.'))
+    const update = () => { setLocationState(readLocation()); setMobile(false); window.scrollTo(0, 0); main.current?.focus({ preventScroll: true }) }
+    window.addEventListener('hashchange', update)
+    window.addEventListener('popstate', update)
+    return () => { window.removeEventListener('hashchange', update); window.removeEventListener('popstate', update) }
   }, [])
-
-  const effectiveDate = rankingDate || rankings?.as_of || ''
-
   useEffect(() => {
-    let active = true
-    readLocal<WarehouseAsset>(`/api/warehouse/assets/${selected}${effectiveDate ? `?as_of=${effectiveDate}` : ''}`)
-      .then((data) => { if (active) setAsset(data) })
-      .catch(() => { if (active) setAsset(null) })
-    return () => { active = false }
-  }, [selected, effectiveDate])
+    function shortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); search.current?.focus() }
+      if (event.key === 'Escape') { setQuery(''); setMobile(false) }
+    }
+    window.addEventListener('keydown', shortcut)
+    return () => window.removeEventListener('keydown', shortcut)
+  }, [])
+  const navigate = (next: Page, symbol = ticker) => {
+    const hash = '#' + `${slug(next)}${next === 'Company Research' ? `/${symbol}` : ''}`
+    if (location.hash !== hash) window.history.pushState(null, '', hash)
+    setLocationState(readLocation()); window.scrollTo(0, 0); main.current?.focus({ preventScroll: true })
+    setQuery(''); setMobile(false)
+  }
+  const openCompany = (symbol: string) => navigate('Company Research', symbol)
+  const toggleWatch = () => {
+    const next = watchlist.includes(ticker) ? watchlist.filter(item => item !== ticker) : [...watchlist, ticker]
+    localStorage.setItem('finlab-watchlist', JSON.stringify(next)); setWatchlist(next)
+  }
+  const universe = useRequest<{ companies: Company[] }>('/api/universe')
+  const warehouse = useRequest<Warehouse>('/api/warehouse/status')
+  const study = useRequest<{ version?: string; model_version?: string; end?: string }>(
+    page === 'Overview' ? '/api/analytics/model-validation' : null)
+  const engine = useRequest<{ pipeline_state: string }>(page === 'Overview' ? '/api/data/status' : null)
+  const effective = cutoff || warehouse.data?.price_range[1] || ''
+  const showDiscovery = ['Overview', 'Discover', 'Watchlist'].includes(page)
+  const previousDate = effective && page === 'Overview'
+    ? new Date(new Date(effective + 'T12:00:00Z').valueOf() - 7 * 86400000).toISOString().slice(0, 10)
+    : ''
+  const discovery = useRequest<Discovery>(showDiscovery && effective ? `/api/analytics/discovery?as_of=${effective}` : null)
+  const previous = useRequest<Discovery>(previousDate && discovery.data
+    ? `/api/analytics/discovery?as_of=${previousDate}` : null)
+  const companyRoute = page === 'Company Research' && effective
+  const asset = useRequest<Asset>(companyRoute ? `/api/warehouse/assets/${encodeURIComponent(ticker)}?as_of=${effective}` : null)
+  const identity = asset.data?.company?.security_id
+  const assessment = useRequest<Assessment>(companyRoute ? `/api/analytics/factors/${encodeURIComponent(ticker)}?as_of=${effective}` : null)
+  const priceHistory = useRequest<{ prices: Point[]; benchmark: Point[] }>(companyRoute && identity
+    ? `/api/warehouse/history/${encodeURIComponent(identity)}?as_of=${effective}` : null)
+  const candidates = query.trim() ? (universe.data?.companies ?? []).filter(company =>
+    `${company.ticker} ${company.name}`.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 7) : []
+  const trend = assessment.data?.market_factors.find(item => item.factor === 'price_to_sma200')?.value
+  const prices = priceHistory.data?.prices ?? asset.data?.prices ?? []
+  const latest = prices.at(-1), prior = prices.at(-2)
+  const dailyChange = latest && prior && prior.close > 0 ? latest.close / prior.close - 1 : null
+  const dataNeeded = page === 'Overview' || page === 'Discover' || page === 'Watchlist'
+  const company = asset.data?.company
+  const score = assessment.data?.assessment
+  const drivers = score?.positive_contributors ?? []
+  const concerns = score?.negative_contributors ?? []
 
-  useEffect(() => {
-    let active = true
-    readLocal<Assessment>(`/api/analytics/factors/${selected}${effectiveDate ? `?as_of=${effectiveDate}` : ''}`)
-      .then((data) => { if (active) setAssessment(data) })
-      .catch(() => { if (active) setAssessment(null) })
-    return () => { active = false }
-  }, [selected, effectiveDate])
+  return <div className={`app-shell ${collapsed ? 'rail' : ''}`}>
+    <a className="skip-link" href="#main-content" onClick={event => { event.preventDefault(); main.current?.focus({ preventScroll: true }) }}>Skip to content</a>
+    {mobile && <button type="button" className="nav-scrim" aria-label="Close navigation" onClick={() => setMobile(false)} />}
+    <aside id="app-navigation" className={`sidebar ${mobile ? 'mobile-open' : ''}`}>
+      <div className="brand"><button type="button" onClick={() => navigate('Overview')} aria-label="FinLab home">
+        <span className="brand-mark">F</span><span className="nav-label">Fin<span>Lab</span></span>
+      </button></div>
+      <nav aria-label="Main navigation">{navigation.map(group => <div className="nav-group" key={group.title}>
+        <p className="nav-label">{group.title}</p>
+        {group.pages.map(([item, icon]) => <button key={item} type="button" title={item} aria-label={item}
+          aria-current={page === item ? 'page' : undefined} onClick={() => navigate(item)}>
+          <span aria-hidden="true" className="nav-icon">{icon}</span><span className="nav-label">{item}</span>
+        </button>)}
+      </div>)}</nav>
+      <div className="sidebar-end"><small className="nav-label">Local research workspace</small><button type="button" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => { setCollapsed(!collapsed); localStorage.setItem('finlab-nav-compact', String(!collapsed)) }}>{collapsed ? '▣' : '◫'}<span className="nav-label"> Collapse sidebar</span></button></div>
+    </aside>
 
-  useEffect(() => {
-    let active = true
-    readLocal<Rankings>(`/api/analytics/rankings${rankingDate ? `?as_of=${rankingDate}` : ''}`)
-      .then((data) => { if (active) setRankings(data) })
-      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : 'Données indisponibles.') })
-    return () => { active = false }
-  }, [rankingDate])
+    <div className="workspace">
+      <header className="topbar">
+        <button type="button" className="mobile-toggle" aria-controls="app-navigation" aria-expanded={mobile}
+          onClick={() => setMobile(!mobile)} aria-label="Toggle navigation">☰</button>
+        <form className="global-search" role="search" onSubmit={event => { event.preventDefault(); if (candidates[0]) openCompany(candidates[0].ticker) }}>
+          <label className="sr-only" htmlFor="global-search">Search companies</label>
+          <span aria-hidden="true">⌕</span><input id="global-search" ref={search} type="search" value={query} placeholder="Search companies"
+            autoComplete="off" onChange={event => setQuery(event.target.value)} aria-controls={query.trim() ? 'global-results' : undefined} />
+          <kbd>⌘ K</kbd>
+          {query.trim() && <div className="search-results" id="global-results" aria-label="Company matches">
+            {candidates.length ? candidates.map(item => <button type="button" key={item.ticker} onClick={() => openCompany(item.ticker)}><strong>{item.ticker}</strong> {item.name}</button>)
+              : <p>{universe.error ? 'Company directory unavailable.' : 'No matching companies.'}</p>}
+          </div>}
+        </form>
+        <label className="date-control">As of<input type="date" aria-label="Research cutoff date" value={cutoff || effective} max={warehouse.data?.price_range[1] ?? undefined} onChange={event => setCutoff(event.target.value)} /></label>
+        {cutoff && <button type="button" className="latest-button" onClick={() => setCutoff('')}>Latest</button>}
+      </header>
 
-  const sectors = ['Tous', ...Array.from(new Set(companies.map((company) => company.sector))).sort()]
-  const rows = (rankings?.rows ?? []).filter((row) =>
-    (sector === 'Tous' || row.sector === sector) &&
-    (!query || `${row.ticker} ${row.name}`.toLowerCase().includes(query.toLowerCase())) &&
-    (!riskMax || (row.volatility != null && row.volatility * 100 <= Number(riskMax))) &&
-    (!yieldMin || (row.earnings_yield != null && row.earnings_yield * 100 >= Number(yieldMin))) &&
-    (!momentumMin || (row.momentum_3m != null && row.momentum_3m * 100 >= Number(momentumMin)))
-  )
-
-  return (
-    <main>
-      <aside>
-        <div className="brand"><span>FIN</span>LAB</div>
-        <p className="eyebrow">DATA-DRIVEN RESEARCH</p>
-        <nav>
-          {(['Overview', 'Ranking', 'Company', 'Data', 'Strategy Lab', 'Portfolio'] as const).map((item) => (
-            <button key={item} className={page === item ? 'nav-active' : ''} onClick={() => setPage(item)}>
-              <span>{item === 'Overview' ? '◫' : item === 'Ranking' ? '◆' : item === 'Company' ? '●' : '▦'}</span>{item === 'Overview' ? 'Vue générale' : item === 'Ranking' ? 'Classement' : item === 'Company' ? 'Analyse' : item === 'Data' ? 'Data Center' : item}
-            </button>
-          ))}
-        </nav>
-        <div className="watchlist-head"><span>UNIVERS</span><b>{companies.length}</b></div>
-        <div className="ticker-list">
-          {companies.map((company) => (
-            <button key={company.ticker} className={selected === company.ticker ? 'ticker selected' : 'ticker'} onClick={() => { setSelected(company.ticker); setAsset(null); setPage('Company') }}>
-              <span><strong>{company.ticker}</strong><small>{company.name}</small></span>
-            </button>
-          ))}
+      <main id="main-content" className="page-content" tabIndex={-1} ref={main}>
+        <div className="page-heading"><div><span className="eyebrow">{page === 'Data Center' ? 'DATA ENGINE' : 'FINLAB ANALYTICS'}</span>
+          <h1>{titles[page]}</h1></div>
+          {effective && <span className="pill history-label">{cutoff ? 'Historical cutoff' : 'Latest published'} · {effective}</span>}
         </div>
-      </aside>
 
-      <section className="workspace">
-        <header>
-          <div><p className="eyebrow">LOCAL WAREHOUSE</p><h1>{page === 'Overview' ? 'Vue générale' : page === 'Ranking' ? 'Classement quantitatif' : page === 'Company' ? 'Analyse fondamentale' : page === 'Data' ? 'Data Center' : page}</h1></div>
-          {rankings && (page === 'Ranking' || page === 'Overview') && <div className="as-of"><span>POINT-IN-TIME</span><strong>{rankings.as_of}</strong><small>{rankings.freshness?.status}</small></div>}
-        </header>
+        {dataNeeded && !discovery.data && <Pending message="Loading published research…" error={warehouse.error ?? discovery.error} retry={warehouse.error ? warehouse.retry : discovery.retry} />}
+        {page === 'Overview' && discovery.data && <Overview data={discovery.data} pipeline={engine.data?.pipeline_state} previous={previous.data} study={study.data}
+          published={warehouse.data?.published_at} openCompany={openCompany} navigate={navigate} />}
+        {(page === 'Discover' || page === 'Watchlist') && discovery.data && <Screener key={`${page}-${effective}`}
+          data={discovery.data} saved={page === 'Watchlist' ? watchlist : undefined} openCompany={openCompany} />}
 
-        {page === 'Strategy Lab' && <StrategyLab />}
+        {page === 'Company Research' && !asset.data && <Pending message={`Loading ${ticker}…`} error={warehouse.error ?? asset.error} retry={warehouse.error ? warehouse.retry : asset.retry} />}
+        {page === 'Company Research' && asset.data && !asset.data.available && <section className="panel empty"><h2>{ticker}</h2><p>{asset.data.reason}</p><button type="button" onClick={() => navigate('Discover')}>Browse companies</button></section>}
+        {page === 'Company Research' && asset.data?.available && <>
+          <section className="panel company-heading">
+            <div className="company-identity"><span className="ticker-mark">{ticker.slice(0, 2)}</span><div><h2>{company?.name ?? ticker}</h2><p>{ticker} · {company?.sector ?? 'Sector unavailable'}{company?.exchange ? ` · ${company.exchange}` : ''}</p></div></div>
+            <div className="company-price"><strong>{cash(latest?.close, company?.currency)}</strong><span>{latest?.date ?? 'No published close'}{dailyChange != null && <> · <b className={dailyChange >= 0 ? 'positive' : 'negative'}>{pct(dailyChange)}</b> vs. prior observed close</>}</span></div>
+            <button type="button" aria-pressed={watchlist.includes(ticker)} onClick={toggleWatch}>{watchlist.includes(ticker) ? '★ Saved' : '☆ Watchlist'}</button>
+          </section>
+          {assessment.data && score ? <>
+            <section className="panel assessment-hero"><div><span className="eyebrow">RESEARCH SCORE</span><h2>Investment opportunity</h2>
+              <div className="hero-score">{scoreText(score.opportunity_score)} <span>/ 100</span></div>
+              <p>{score.opportunity_score == null ? 'The available evidence does not support a combined score for this date.'
+                : `${classification(score.opportunity_score)}. ${drivers[0] ? `${metricName(drivers[0].metric)} is the largest positive contributor.` : 'Inspect the score breakdown for supporting evidence.'}`}</p>
+              <small>Relative research score · Predictive evidence inconclusive</small></div>
+              <ScoreTiles row={{ fundamental: score.fundamental_score, technical: score.technical_score, risk: score.risk_resilience_score }} />
+            </section>
+            <div className="evidence-grid">
+              <section className="panel"><h2 className="positive">Strengths</h2>{drivers.length ? <ul>{drivers.map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}</ul> : <p>No positive contributions available.</p>}</section>
+              <section className="panel"><h2 className="warning">Concerns</h2>{concerns.length ? <ul>{concerns.map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}</ul> : <p>No below-midpoint contributions available.</p>}</section>
+              <section className="panel"><h2>What to watch</h2>{score.contradictions.length ? score.contradictions.map(item => <p key={item}>{item}</p>)
+                : <p>{trend != null ? `Price is ${pct(Math.abs(trend))} ${trend >= 0 ? 'above' : 'below'} its 200-day average. Watch for a close on the other side of that level.` : 'Trend confirmation needs a full 200-session price window.'}</p>}</section>
+            </div>
+          </> : <Pending message="Evaluating fundamentals, market conditions, and risk…" error={assessment.error} retry={assessment.retry} />}
+          <FinancialChart key={ticker} points={prices} benchmark={priceHistory.data?.benchmark} label="Price history" currency={company?.currency} />
+          {priceHistory.error && <p role="status">Extended history unavailable. Showing recent prices. <button type="button" onClick={priceHistory.retry}>Retry history</button></p>}
+          {assessment.data && <CompanyAssessment data={assessment.data} />}
+          <details className="panel"><summary>Latest filing and source observations</summary>
+            <p>{asset.data.latest_filing ? `${asset.data.latest_filing.form} · filed ${asset.data.latest_filing.filed_date}` : 'No filing available at this cutoff.'}</p>
+            <div className="table-wrap"><table><thead><tr><th>Observation</th><th>Period</th><th>Filed</th><th>Value</th></tr></thead>
+              <tbody>{asset.data.facts.map((fact, index) => <tr key={`${fact.tag}-${fact.period_end}-${index}`}><th scope="row">{metricName(fact.tag)}</th><td>{fact.period_end} · {fact.duration_bucket}</td><td>{fact.filed_date}</td><td>{fact.value.toLocaleString('en-US')} {fact.unit}</td></tr>)}</tbody></table></div>
+          </details>
+        </>}
+
+        {page === 'Model Validation' && <ModelValidation />}
+        {page === 'Strategies' && <StrategyLab />}
         {page === 'Portfolio' && <PortfolioPanel />}
-        {page === 'Data' && <DataCenterControls />}
-        {error && <div className="error">{error}</div>}
-
-        {warehouse && (
-          <div className="metrics">
-            <article><span>Entreprises</span><strong>{warehouse.datasets.entity.toLocaleString('fr-FR')}</strong></article>
-            <article><span>Faits SEC</span><strong>{warehouse.datasets.fact.toLocaleString('fr-FR')}</strong></article>
-            <article><span>Clôtures</span><strong>{warehouse.datasets.price_daily.toLocaleString('fr-FR')}</strong></article>
-            <article><span>Filings</span><strong>{warehouse.datasets.filing.toLocaleString('fr-FR')}</strong></article>
-          </div>
-        )}
-
-        {page === 'Ranking' && (
-          <>
-            <div className="toolbar">
-              <label>Recherche<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ticker ou entreprise" /></label>
-              <label>Date du classement<input type="date" value={rankingDate} onChange={(event) => { setError(''); setAsset(null); setRankings(null); setRankingDate(event.target.value) }} /></label>
-              <label>Secteur<select value={sector} onChange={(event) => setSector(event.target.value)}>{sectors.map((item) => <option key={item}>{item}</option>)}</select></label>
-              <label>Volatilité max. %<input type="number" value={riskMax} onChange={(event) => setRiskMax(event.target.value)} /></label>
-              <label>Rendement bénéficiaire min. %<input type="number" value={yieldMin} onChange={(event) => setYieldMin(event.target.value)} /></label>
-              <label>Momentum 3m min. %<input type="number" value={momentumMin} onChange={(event) => setMomentumMin(event.target.value)} /></label>
-              <p>{rows.length} résultats · score descriptif, pas une prédiction de profit</p>
-            </div>
-            <div className="table-shell">
-              <table>
-                <thead><tr><th>Rang</th><th>Titre</th><th>Secteur</th><th>Clôture disponible</th><th>Score</th><th>Catégorie</th><th>Momentum 3m</th><th>Volatilité</th><th>Drawdown</th><th>Qualité données</th></tr></thead>
-                <tbody>{rows.map((row, index) => (
-                  <tr key={row.ticker} onClick={() => { setSelected(row.ticker); setAsset(null); setPage('Company') }}>
-                    <td>{index + 1}</td><td><strong>{row.ticker}</strong><small>{row.name}</small></td><td>{row.sector}</td>
-                    <td>{money(row.price)}<small>{row.price_date}</small></td><td><b>{row.score?.toFixed(1) ?? '—'}</b></td><td><span className={`status ${row.category.toLowerCase().replaceAll(' ', '-')}`}>{row.category}</span></td>
-                    <td className={(row.momentum_3m ?? 0) >= 0 ? 'positive' : 'negative'}>{percent(row.momentum_3m)}</td>
-                    <td>{percent(row.volatility)}</td><td className="negative">{percent(row.max_drawdown)}</td><td>{row.data_status}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {page === 'Company' && asset && (!effectiveDate || asset.as_of === effectiveDate) && (
-          <div className="company-view">
-            {asset.available ? (
-              <>
-                <div className="company-header"><div><p className="eyebrow">{asset.company?.sector}</p><h2>{asset.company?.name}</h2><small>{asset.ticker} · CIK {asset.company?.cik}</small></div>{warehouse && <div className="score-ring"><strong>{rankings?.rows.find((row) => row.ticker === asset.ticker)?.score?.toFixed(1) ?? '—'}</strong><span>score</span></div>}</div>
-                <section className="panel"><h3>Explication du classement historique</h3><p>Facteurs pondérés : valeur, qualité, croissance, momentum et risque. Les rangs sectoriels utilisent le marché global quand le secteur compte moins de trois observations valides.</p><div className="fact-list">{Object.entries(rankings?.rows.find((row) => row.ticker === asset.ticker)?.factor_scores ?? {}).map(([factor, score]) => <div key={factor}><strong>{factor}</strong><span>{score == null ? 'Données insuffisantes' : `${score.toFixed(1)} / 100`}</span><small>{score == null ? '' : score > 55 ? 'Signal relatif positif' : score < 45 ? 'Signal relatif négatif' : 'Neutre'}</small></div>)}</div><p>Le classement ne garantit pas un rendement futur. Les univers historiques incomplets et les révisions des fournisseurs limitent son interprétation.</p></section>
-                <section className="panel"><h3>Évaluation multidimensionnelle</h3><p>{assessment?.assessment.model_version ?? 'Évaluation indisponible'} · Publication {assessment?.warehouse_epoch ?? '—'}</p><div className="fact-list">{[['Opportunité',assessment?.assessment.opportunity_score],['Fondamentaux',assessment?.assessment.fundamental_score],['Technique',assessment?.assessment.technical_score],['Résilience au risque',assessment?.assessment.risk_resilience_score]].map(([label,value])=><div key={String(label)}><strong>{label}</strong><span>{typeof value==='number'?`${value.toFixed(1)} / 100`:'Données insuffisantes'}</span></div>)}</div><button onClick={()=>setQuantMode(!quantMode)}>{quantMode?'Mode simple':'Mode quantitatif'}</button><p>{assessment?.assessment.weight_status}</p><p>Options : {assessment?.assessment.options_context.reason ?? 'Non disponible'}</p><h4>Signaux concordants</h4>{assessment?.assessment.explanations.map(x=><p key={x}>{x}</p>)}<h4>Contradictions</h4>{assessment?.assessment.contradictions.length?assessment.assessment.contradictions.map(x=><p key={x}>{x}</p>):<p>Aucune contradiction détectable avec les métriques disponibles.</p>}<h4>Fondamentaux</h4><div className="fact-list">{Object.entries(assessment?.fundamental_factors.factors??{}).map(([key,item])=><details key={key}><summary><strong>{key}</strong> · {item.value==null?'Indisponible':item.value.toLocaleString('fr-FR',{maximumFractionDigits:3})}</summary><p>{item.definition}</p><small>{quantMode?`${item.status} · as of ${assessment?.fundamental_factors.as_of??effectiveDate} · modèle ${assessment?.assessment.model_version}`:'Indicateur calculé uniquement lorsque les données SEC alignées sont disponibles.'}</small></details>)}</div><h4>Marché et risque</h4><div className="fact-list">{assessment?.market_factors.map(item=><div key={item.factor}><strong>{item.factor}</strong><span>{item.value==null?'Indisponible':item.value.toLocaleString('fr-FR',{maximumFractionDigits:4})}</span><small>{item.data_status}</small></div>)}</div></section><div className="company-grid">
-                  <article><span>Dernier filing</span><strong>{asset.latest_filing?.form ?? '—'}</strong><small>{asset.latest_filing?.filed_date ?? '—'}</small></article>
-                  <article><span>Prix disponible</span><strong>{asset.prices.length ? money(asset.prices[asset.prices.length - 1].close) : '—'}</strong><small>{asset.prices.length ? asset.prices[asset.prices.length - 1].date : 'Pas de prix'}</small></article>
-                  <article><span>Facts récents</span><strong>{asset.facts.length}</strong><small>observations SEC</small></article>
-                  <article><span>Devise</span><strong>{asset.company?.currency ?? '—'}</strong><small>{asset.company?.exchange ?? 'Lieu non renseigné'}</small></article>
-                </div>
-                <div className="content-grid">
-                  <section className="panel"><h3>Historique des clôtures</h3>{asset.prices.length ? <svg className="sparkline" viewBox="0 0 700 220" preserveAspectRatio="none"><polyline fill="none" stroke="#62c4a3" strokeWidth="3" points={asset.prices.slice(-90).map((price, index, values) => { const closes = values.map((item) => item.close); const min = Math.min(...closes); const max = Math.max(...closes); const x = values.length === 1 ? 0 : index * 700 / (values.length - 1); const y = max === min ? 110 : 210 - (price.close - min) * 190 / (max - min); return `${x},${y}` }).join(' ')} /></svg> : <div className="empty">Aucune clôture disponible</div>}</section>
-                  <section className="panel"><h3>Dernières observations SEC</h3><div className="fact-list">{asset.facts.slice(0, 12).map((fact, index) => <div key={`${fact.tag}-${fact.period_end}-${index}`}><strong>{fact.tag}</strong><span>{fact.value.toLocaleString('fr-FR')} {fact.unit}</span><small>{fact.period_end} · publié {fact.filed_date}</small></div>)}</div></section>
-                </div>
-              </>
-            ) : <div className="empty">Données réelles indisponibles pour {asset.ticker}: {asset.reason}</div>}
-          </div>
-        )}
-
-        {page === 'Overview' && rankings && (
-          <div className="content-grid"><section className="panel"><h3>Top 10 — recherche quantitative</h3>{rankings.rows.slice(0, 10).map((row) => <div className="rank-list" key={row.ticker}><strong>{row.ticker}</strong><span>{row.score?.toFixed(1) ?? '—'}</span><small>{row.category}</small></div>)}</section><section className="panel"><h3>Cadre méthodologique</h3><p>Les scores combinent rendement bénéficiaire, marge nette, croissance du revenu, momentum et volatilité des données réellement disponibles. Ils ne constituent pas une recommandation d’achat ou une probabilité de profit.</p><small>{rankings.method} · as of {rankings.as_of}</small></section></div>
-        )}
-
-        {page === 'Data' && warehouse && (
-          <div className="content-grid"><section className="panel"><h3>Couverture du warehouse</h3><div className="fact-list"><div><strong>Faits SEC</strong><span>{warehouse.datasets.fact.toLocaleString('fr-FR')}</span><small>{warehouse.fundamental_range[0]} → {warehouse.fundamental_range[1]}</small></div><div><strong>Prix</strong><span>{warehouse.datasets.price_daily.toLocaleString('fr-FR')}</span><small>{warehouse.price_range[0]} → {warehouse.price_range[1]}</small></div><div><strong>Filings</strong><span>{warehouse.datasets.filing.toLocaleString('fr-FR')}</span></div></div></section><section className="panel"><h3>Provenance</h3><p>{warehouse.price_label}</p><p>Publication : {warehouse.published_at}</p><p>SEC pour les fondamentaux; Yahoo ou Stooq/Alpaca seulement au Data Engine; aucune donnée externe appelée par cette vue Analytics.</p></section></div>
-        )}
-      </section>
-    </main>
-  )
+        {page === 'Data Center' && <>
+          {warehouse.data ? <div className="status-grid">{Object.entries(warehouse.data.datasets).map(([key, count]) =>
+            <article className="panel" key={key}><span>{({ entity: 'Tracked issuers', filing: 'SEC filings', security: 'Security records', fact: 'Financial observations', price_daily: 'Daily price observations' } as Record<string,string>)[key] ?? key}</span><strong>{count.toLocaleString('en-US')}</strong></article>)}</div>
+            : <Pending message="Loading warehouse status…" error={warehouse.error} retry={warehouse.retry} />}
+          {warehouse.data && <section className="panel"><h2>Current publication</h2><dl className="publication"><dt>Published</dt><dd>{warehouse.data.published_at ? new Date(warehouse.data.published_at).toLocaleString('en-US') : 'Unavailable'}</dd>
+            <dt>Price coverage</dt><dd>{warehouse.data.price_range.join(' to ')}</dd><dt>Filing coverage</dt><dd>{warehouse.data.fundamental_range.join(' to ')}</dd>
+            <dt>Snapshot epoch</dt><dd>{warehouse.data.warehouse_epoch}</dd></dl></section>}
+          <DataCenterControls />
+        </>}
+      </main>
+    </div>
+  </div>
 }
 
 export default App

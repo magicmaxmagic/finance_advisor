@@ -6,13 +6,16 @@ from math import isfinite
 from statistics import pstdev
 
 DEFINITIONS = {
+    "equity_to_assets": "Latest aligned fiscal-year parent book equity / total assets. Accounting capital proxy, not a regulatory capital ratio.",
     "net_margin": "Annual parent net income / annual revenue, same reporting period.",
-    "trailing_pe": "Latest price / split-adjusted annual diluted EPS; negative EPS is unavailable.",
+    "ttm_pe": "Reported-share market cap divided by positive net income summed over four contiguous reported fiscal quarters.",
+    "ttm_earnings_yield": "Positive net income summed over four contiguous reported fiscal quarters divided by reported-share market cap.",
+    "trailing_pe": "Reported-share market capitalization / positive latest published fiscal-year parent net income. Historical API key; fiscal-year multiple.",
     "gross_margin": "(Revenue - reported cost of revenue) / revenue.",
     "ebitda_margin": "(Operating income + reported D&A) / revenue.",
     "roa": "Annual net income / average total assets.",
     "ev_to_ebit": "(Market capitalization + verified debt + preferred equity + NCI - cash) / operating income.",
-    "ev_to_revenue": "Same simplified EV / annual revenue.",
+    "ev_to_revenue": "Fully supported enterprise value / positive annual revenue.",
     "price_to_fcf": "Market capitalization / positive annual free cash flow.",
     "net_debt_to_ebitda": "(Verified debt - cash) / positive operating income plus D&A.",
     "debt_to_equity": "Verified debt / positive parent equity.",
@@ -34,12 +37,18 @@ DEFINITIONS = {
     "fcf_growth": "Latest annual free cash flow / prior aligned positive free cash flow - 1.",
     "growth_acceleration": "Current annual revenue growth less prior annual revenue growth.",
     "earnings_variability": "Population standard deviation of five annual net incomes / absolute mean; lower is more stable.",
+    "reported_debt_to_assets": "(Current term debt + noncurrent term debt + commercial paper from one filing) / assets. Reported categories only.",
+    "margin_change": "Current fiscal-year net margin less prior fiscal-year net margin.",
     "debt_to_assets": "Verified combined interest-bearing debt / same-date positive assets.",
 }
 
 
 def calculate_fundamentals(
-    observations: list[dict], as_of: date, market_cap: float | None = None
+    observations: list[dict],
+    as_of: date,
+    market_cap: float | None = None,
+    *,
+    financial_issuer: bool = False,
 ) -> dict:
     if market_cap is not None and (not isfinite(market_cap) or market_cap <= 0):
         market_cap = None
@@ -59,8 +68,24 @@ def calculate_fundamentals(
 
     def fact(name, day, bucket="annual"):
         row = selected.get((name, day, bucket))
+        if row and bucket == "annual":
+            revenue_row = selected.get(("revenue", day, "annual"))
+            if (
+                not revenue_row
+                or row["period_start"] is None
+                or row["period_start"] != revenue_row["period_start"]
+            ):
+                return None
+            if not 350 <= (day - row["period_start"]).days <= 380:
+                return None
         value = row["value"] if row else None
         return value if value is not None and isfinite(value) else None
+
+    def strict_cash(day):
+        record = selected.get(("cash", day, "instant"))
+        if record and record["source_tag"] == "CashAndCashEquivalentsAtCarryingValue":
+            return fact("cash", day, "instant")
+        return None
 
     def divide(numerator, denominator):
         return (
@@ -71,7 +96,7 @@ def calculate_fundamentals(
 
     def fcf(day):
         cfo, capex = fact("cfo", day), fact("capex", day)
-        return cfo - capex if cfo is not None and capex is not None else None
+        return cfo - capex if cfo is not None and capex is not None and capex >= 0 else None
 
     def parent_equity(day):
         record = selected.get(("equity", day, "instant"))
@@ -90,7 +115,7 @@ def calculate_fundamentals(
             verified_debt(day),
             parent_equity(day),
             fact("noncontrolling_interest", day, "instant"),
-            fact("cash", day, "instant"),
+            strict_cash(day),
         ]
         return (
             components[0] + components[1] + components[2] - components[3]
@@ -111,6 +136,7 @@ def calculate_fundamentals(
         free_cash = fcf(day)
         equity = parent_equity(day)
         values.update(
+            equity_to_assets=divide(equity, fact("total_assets", day, "instant")),
             net_margin=divide(income, revenue),
             operating_margin=divide(operating, revenue),
             fcf_margin=divide(free_cash, revenue),
@@ -122,7 +148,7 @@ def calculate_fundamentals(
             price_to_sales=divide(market_cap, revenue),
             trailing_pe=divide(market_cap, income) if income is not None and income > 0 else None,
             gross_margin=(revenue - fact("cogs", day)) / revenue
-            if revenue and fact("cogs", day) is not None
+            if revenue is not None and revenue > 0 and fact("cogs", day) is not None
             else None,
             ebitda_margin=divide(
                 (operating + fact("depreciation_amortization", day))
@@ -136,45 +162,26 @@ def calculate_fundamentals(
                 / 2,
             )
             if len(annual) > 1
+            and year_pair(day, annual[1])
             and fact("total_assets", day, "instant") is not None
             and fact("total_assets", annual[1], "instant") is not None
-            else None,
-            ev_to_ebit=divide(
-                market_cap
-                + verified_debt(day)
-                + (fact("preferred_equity", day, "instant") or 0)
-                + (fact("noncontrolling_interest", day, "instant") or 0)
-                - (fact("cash", day, "instant") or 0),
-                operating,
-            )
-            if market_cap is not None and verified_debt(day) is not None
-            else None,
-            ev_to_revenue=divide(
-                market_cap
-                + verified_debt(day)
-                + (fact("preferred_equity", day, "instant") or 0)
-                + (fact("noncontrolling_interest", day, "instant") or 0)
-                - (fact("cash", day, "instant") or 0),
-                revenue,
-            )
-            if market_cap is not None and verified_debt(day) is not None
             else None,
             price_to_fcf=divide(market_cap, free_cash)
             if free_cash is not None and free_cash > 0
             else None,
             net_debt_to_ebitda=divide(
-                verified_debt(day) - fact("cash", day, "instant"),
+                verified_debt(day) - strict_cash(day),
                 operating + fact("depreciation_amortization", day),
             )
             if verified_debt(day) is not None
-            and fact("cash", day, "instant") is not None
+            and strict_cash(day) is not None
             and operating is not None
             and fact("depreciation_amortization", day) is not None
             else None,
             debt_to_equity=divide(verified_debt(day), equity)
             if verified_debt(day) is not None and equity is not None
             else None,
-            cash_to_debt=divide(fact("cash", day, "instant"), verified_debt(day))
+            cash_to_debt=divide(strict_cash(day), verified_debt(day))
             if verified_debt(day) is not None
             else None,
             current_ratio=divide(
@@ -182,7 +189,6 @@ def calculate_fundamentals(
             ),
             interest_coverage=divide(operating, fact("interest_expense", day)),
         )
-        equity = parent_equity(day)
         values["price_to_book"] = divide(market_cap, equity)
         if len(annual) > 1 and year_pair(day, annual[1]):
             previous = annual[1]
@@ -193,6 +199,9 @@ def calculate_fundamentals(
             )
             for key in ("revenue_growth", "earnings_growth", "fcf_growth"):
                 values[key] = values[key] - 1 if values[key] is not None else None
+            old_margin = divide(fact("net_income", previous), fact("revenue", previous))
+            if values["net_margin"] is not None and old_margin is not None:
+                values["margin_change"] = values["net_margin"] - old_margin
             previous_equity = parent_equity(previous)
             if equity is not None and previous_equity is not None:
                 values["roe"] = divide(income, (equity + previous_equity) / 2)
@@ -218,11 +227,25 @@ def calculate_fundamentals(
             debt,
             fact("preferred_equity", day, "instant"),
             fact("noncontrolling_interest", day, "instant"),
-            fact("cash", day, "instant"),
+            strict_cash(day),
         ]
-        if all(v is not None for v in claims) and operating is not None and da is not None:
-            values["ev_to_operating_ebitda"] = divide(
-                claims[0] + claims[1] + claims[2] + claims[3] - claims[4], operating + da
+        if all(v is not None for v in claims):
+            ev = sum(claims[:4]) - claims[4]
+            if ev > 0:
+                values["ev_to_operating_ebitda"] = (
+                    divide(ev, operating + da) if operating is not None and da is not None else None
+                )
+                values["ev_to_ebit"] = divide(ev, operating)
+                values["ev_to_revenue"] = divide(ev, revenue)
+        debt_parts = ("debt_current_maturities", "debt_noncurrent", "commercial_paper")
+        records = [selected.get((key, day, "instant")) for key in debt_parts]
+        parts = [fact(key, day, "instant") for key in debt_parts]
+        if (
+            all(v is not None and v >= 0 for v in parts)
+            and len({r["accession_number"] for r in records}) == 1
+        ):
+            values["reported_debt_to_assets"] = divide(
+                sum(parts), fact("total_assets", day, "instant")
             )
         earnings = [fact("net_income", period) for period in annual[:5]]
         if (
@@ -232,20 +255,118 @@ def calculate_fundamentals(
         ):
             mean = sum(earnings) / 5
             values["earnings_variability"] = pstdev(earnings) / abs(mean) if mean else None
+    nonapplicable = (
+        {
+            "ev_to_operating_ebitda",
+            "ev_to_ebit",
+            "ev_to_revenue",
+            "roic",
+            "gross_margin",
+            "ebitda_margin",
+            "net_debt_to_ebitda",
+            "debt_to_equity",
+            "debt_to_assets",
+            "reported_debt_to_assets",
+            "interest_coverage",
+            "current_ratio",
+            "cash_to_debt",
+            "fcf_margin",
+            "fcf_yield",
+            "price_to_fcf",
+            "cash_flow_quality",
+            "fcf_growth",
+        }
+        if financial_issuer
+        else set()
+    )
+    for key in nonapplicable:
+        values[key] = None
+    ttm, quarters = trailing_income(list(selected.values()), as_of)
+    if ttm is not None and ttm > 0:
+        values["ttm_pe"] = divide(market_cap, ttm)
+        values["ttm_earnings_yield"] = divide(ttm, market_cap)
     return {
         "as_of": str(as_of),
+        "period_type": "latest_published_fiscal_year",
+        "source": "SEC companyfacts",
+        "ttm_quarter_evidence": [
+            {**row, **{key: str(row[key]) for key in ("period_start", "period_end", "filed_date")}}
+            for row in quarters
+        ],
+        "filing_evidence": [
+            {
+                key: str(row[key])
+                if key in {"period_start", "period_end", "filed_date"} and row[key] is not None
+                else row[key]
+                for key in (
+                    "canonical",
+                    "source_tag",
+                    "period_start",
+                    "period_end",
+                    "filed_date",
+                    "accession_number",
+                    "value",
+                )
+            }
+            for row in sorted(
+                selected.values(),
+                key=lambda row: (row["period_end"], row["canonical"]),
+                reverse=True,
+            )
+            if row["period_end"] in annual[:5] and row["duration_bucket"] in {"annual", "instant"}
+        ],
         "annual_period": str(annual[0]) if annual else None,
         "factors": {
             key: {
                 "value": value,
-                "status": "complete" if value is not None else "insufficient_aligned_inputs",
+                "status": "not_applicable"
+                if key in nonapplicable
+                else "complete"
+                if value is not None
+                else "insufficient_aligned_inputs",
                 "definition": DEFINITIONS[key],
             }
             for key, value in values.items()
         },
         "limitations": [
-            "Annual statements, not trailing twelve months.",
+            "Fiscal-year ratios use annual statements. Explicit TTM ratios require four contiguous reported quarters.",
             "Unverified debt definitions, missing claims or nonpositive denominators are not imputed.",
             "Market value uses latest reported shares and can lag actual issuance/buybacks.",
         ],
     }
+
+
+def trailing_income(observations, as_of):
+    """Sum four contiguous, individually reported quarters. No Q4 imputation."""
+    quarters = sorted(
+        (
+            row
+            for row in observations
+            if row["canonical"] == "net_income"
+            and row["duration_bucket"] == "quarter"
+            and row["filed_date"] <= as_of
+            and row["period_end"] <= as_of
+        ),
+        key=lambda row: row["period_end"],
+        reverse=True,
+    )[:4]
+    if len(quarters) != 4 or (as_of - quarters[0]["period_end"]).days > 180:
+        return None, []
+    if any(
+        not row["period_start"]
+        or not 70 <= (row["period_end"] - row["period_start"]).days <= 110
+        or not isfinite(row["value"])
+        for row in quarters
+    ):
+        return None, []
+    if any(
+        (newer["period_start"] - older["period_end"]).days != 1
+        for newer, older in pairwise(quarters)
+    ):
+        return None, []
+    if (
+        len({row["source_tag"] for row in quarters}) != 1
+        or not 350 <= (quarters[0]["period_end"] - quarters[-1]["period_start"]).days <= 380
+    ):
+        return None, []
+    return sum(row["value"] for row in quarters), quarters

@@ -274,3 +274,53 @@ def test_failed_preparation_leaves_previous_epoch_readable(historical_warehouse,
         == before["warehouse_epoch"]
     )
     assert historical_rankings(date(2020, 12, 31)) == before
+
+
+def test_company_assessment_api_is_point_in_time_and_explicit_about_coverage(
+    historical_warehouse, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from finlab.api.app import app
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("Company assessment accessed network")
+
+    monkeypatch.setattr(socket.socket, "connect", forbid)
+    client = TestClient(app)
+    payload = client.get("/api/analytics/factors/AAA?as_of=2020-12-31")
+    assert payload.status_code == 200, payload.text
+    data = payload.json()
+    assert data["assessment"]["opportunity_score"] is None
+    assert data["assessment"]["universe_status"] == "current_seed_survivorship_bias"
+    assert (
+        data["comparisons"]["trailing_pe"]["sector_status"]
+        == "historical_sector_classifications_unavailable"
+    )
+    assert "999.0" not in payload.text
+    new = client.get("/api/analytics/factors/NEW?as_of=2020-12-31").json()
+    assert new["assessment"]["price_history_status"] == "insufficient_or_inconsistent"
+
+
+def test_discovery_and_history_routes_are_offline_and_point_in_time(
+    historical_warehouse, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from finlab.api.app import app
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("Research endpoints accessed the network")
+
+    monkeypatch.setattr(socket.socket, "connect", forbid)
+    client = TestClient(app)
+    summary = client.get("/api/analytics/discovery?as_of=2020-12-29")
+    assert summary.status_code == 200, summary.text
+    result = summary.json()
+    assert result["as_of"] == "2020-12-29"
+    assert all(row["price_date"] <= result["as_of"] for row in result["rows"] if row["price_date"])
+    history = client.get("/api/warehouse/history/AAA?as_of=2020-12-29&limit=2")
+    assert history.status_code == 200
+    prices = history.json()["prices"]
+    assert len(prices) == 2 and prices[-1]["date"] == "2020-12-29"
+    assert client.get("/api/analytics/model-validation").json()["reason"]

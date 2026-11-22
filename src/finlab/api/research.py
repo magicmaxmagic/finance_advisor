@@ -9,6 +9,24 @@ from pydantic import BaseModel, Field
 router = APIRouter(prefix="/api")
 
 
+@router.get("/analytics/model-validation")
+def model_validation():
+    """Read the most recent archived study without running a simulation."""
+    import json
+
+    from finlab.config import get_settings
+
+    directory = get_settings().reports_dir / "research"
+    for filename in ("validation-v3-latest.json", "score-validation-v2-2020-2022-monthly.json"):
+        path = directory / filename
+        if path.is_file():
+            report = json.loads(path.read_text())
+            return {
+                key: value for key, value in report.items() if key not in {"folds", "universe_ids"}
+            }
+    return {"reason": "No historical validation report has been archived."}
+
+
 class StrategyRequest(BaseModel):
     start: date
     end: date

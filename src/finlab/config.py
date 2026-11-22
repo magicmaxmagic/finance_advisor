@@ -49,6 +49,21 @@ class Settings(BaseSettings):
         }
     )
 
+    assessment_weights: dict[str, float] = Field(
+        default_factory=lambda: {"fundamental": 0.60, "technical": 0.25, "risk": 0.15}
+    )
+
+    @field_validator("assessment_weights")
+    @classmethod
+    def _validate_assessment_weights(cls, weights):
+        if (
+            set(weights) != {"fundamental", "technical", "risk"}
+            or any(not math.isfinite(w) or w < 0 for w in weights.values())
+            or abs(sum(weights.values()) - 1) > 1e-9
+        ):
+            raise ValueError("Dimension weights must be finite, nonnegative and sum to one")
+        return weights
+
     # --- SEC -----------------------------------------------------------------
     sec_user_agent: str = f"finlab {PLACEHOLDER_USER_AGENT_DOMAIN}"
     # SEC's published ceiling is 10 req/s. The field caps it so no caller can

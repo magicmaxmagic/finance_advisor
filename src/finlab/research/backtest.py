@@ -8,16 +8,15 @@ return adjustment basis and currency; raw provider OHLC is not accepted.
 
 import hashlib
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from uuid import uuid4
 
 import numpy as np
 import polars as pl
 
 from finlab.research.stats import performance_metrics
+from finlab.research.trials import research_trial
 
 
 @dataclass(frozen=True)
@@ -151,8 +150,6 @@ def walk_forward_windows(sessions: list[date], train: int, validation: int, test
 
 def run_backtest(prices, targets, *, trial_store: Path, **parameters) -> BacktestResult:
     """Persist a research trial BEFORE simulation, including failed trials."""
-    trial_store.parent.mkdir(parents=True, exist_ok=True)
-    trial_id = uuid4().hex
     inputs_hash = hashlib.sha256(prices.hash_rows().to_numpy().tobytes()).hexdigest()
     config = json.dumps(
         {
@@ -164,26 +161,7 @@ def run_backtest(prices, targets, *, trial_store: Path, **parameters) -> Backtes
         sort_keys=True,
         allow_nan=False,
     )
-    with sqlite3.connect(trial_store) as ledger:
-        ledger.execute(
-            "CREATE TABLE IF NOT EXISTS research_trial(trial_id TEXT PRIMARY KEY, inputs_hash TEXT, config TEXT, state TEXT, results TEXT)"
-        )
-        ledger.execute(
-            "INSERT INTO research_trial VALUES (?,?,?,'running',NULL)",
-            (trial_id, inputs_hash, config),
-        )
-    try:
+    with research_trial(trial_store, inputs_hash, config) as summary:
         result = _simulate(prices, targets, **parameters)
-    except Exception as exc:
-        with sqlite3.connect(trial_store) as ledger:
-            ledger.execute(
-                "UPDATE research_trial SET state='failed',results=? WHERE trial_id=?",
-                (str(exc), trial_id),
-            )
-        raise
-    with sqlite3.connect(trial_store) as ledger:
-        ledger.execute(
-            "UPDATE research_trial SET state='complete',results=? WHERE trial_id=?",
-            (json.dumps(result.metrics, allow_nan=False), trial_id),
-        )
+        summary.update(result.metrics)
     return result

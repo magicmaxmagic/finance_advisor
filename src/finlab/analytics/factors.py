@@ -10,6 +10,39 @@ from finlab.research.stats import performance_metrics
 
 FACTOR_CALCULATION_VERSION = "market-factors-v3"
 
+MARKET_DEFINITIONS = {
+    "annualized_volatility": "Sample standard deviation of close-to-close simple returns times sqrt(252).",
+    "max_drawdown": "Minimum close divided by its running peak, less one, over the supplied history.",
+    "downside_volatility": "Square root of 252 times mean squared negative returns, including zeros on up days.",
+    "beta": "Covariance of asset and SPY daily returns divided by SPY return variance.",
+    "var_95": "Negative of the fifth percentile of daily simple returns, expressed as a loss.",
+    "cvar_95": "Negative mean return at or below the fifth return percentile, expressed as a loss.",
+    "sharpe": "Annualized arithmetic mean daily return divided by annualized volatility. Risk-free rate zero.",
+    "sortino": "Annualized arithmetic mean daily return divided by annualized downside deviation. Target return zero.",
+    "price_to_sma200": "Latest close / SMA200 - 1.",
+    "sma200_slope": "Current SMA200 / SMA200 of the preceding 200-observation block - 1.",
+    "golden_cross": "1 when SMA50 exceeds SMA200, 0 otherwise. This measures alignment.",
+    "bollinger_upper": "SMA20 plus twice the trailing 20-close sample standard deviation.",
+    "bollinger_lower": "SMA20 less twice the trailing 20-close sample standard deviation.",
+    "atr14": "Mean of the last 14 true ranges. True range is max(high - low, |high - prior close|, |low - prior close|).",
+    "adx14": "Mean of the last 14 directional index values, computed from 14-observation sums of directional moves and true ranges.",
+    "relative_volume20": "Latest volume divided by the average volume of the last 20 observed sessions.",
+    "distance_from_52w_high": "Latest close / highest intraday high over the trailing 252 observations - 1.",
+    "rsi": "100 - 100 / (1 + mean up move / mean down move), using 14 simple observations.",
+    "macd": "EMA12 less EMA26, seeded with the first observed close.",
+    "momentum_12_minus_1": "Close 21 observations ago divided by close 252 observations ago - 1.",
+    "relative_momentum_12m": "Asset 252-session price return less SPY price return over the same endpoints.",
+    **{f"ma{n}": f"Arithmetic mean of the last {n} observed closes." for n in (20, 50, 100, 200)},
+    **{
+        f"ema{n}": f"Recursive exponential mean with smoothing factor 2/({n}+1), seeded on the first observed close."
+        for n in (20, 50, 200)
+    },
+    **{
+        f"return_{m}m": f"Latest close divided by the close {n} observations earlier, less one."
+        for m, n in ((1, 21), (3, 63), (6, 126), (12, 252))
+    },
+}
+
 
 def calculate_market_factors(
     prices: pl.DataFrame,
@@ -115,7 +148,7 @@ def calculate_market_factors(
             else None
         )
         high52 = (
-            max(_as_list(frame["high"]))
+            max(_as_list(frame["high"].tail(252)))
             if "high" in frame.columns and trading_days >= 252
             else None
         )

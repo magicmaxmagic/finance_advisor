@@ -174,3 +174,34 @@ concepts:
     kind: instant
     tags:
       - { tag: PreferredStockValue, priority: 1 }
+
+  current_assets:
+    kind: instant
+    tags:
+      - { tag: AssetsCurrent, priority: 1 }
+
+  current_liabilities:
+    kind: instant
+    tags:
+      - { tag: LiabilitiesCurrent, priority: 1 }
+
+  debt_current_maturities:
+    kind: instant
+    tags:
+      - { tag: LongTermDebtCurrent, priority: 1 }
+
+  debt_noncurrent:
+    kind: instant
+    tags:
+      - { tag: LongTermDebtNoncurrent, priority: 1 }
+
+  commercial_paper:
+    kind: instant
+    tags:
+      - { tag: CommercialPaper, priority: 1 }
+
+  interest_expense:
+    kind: flow
+    tags:
+      - { tag: InterestExpense, priority: 1 }
+      - { tag: InterestAndDebtExpense, priority: 2 }

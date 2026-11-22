@@ -11,11 +11,13 @@ No paid market-data provider or cloud database is required.
 
 ```bash
 make setup
+npm --prefix frontend ci
 make env
 # Set FINLAB_SEC_USER_AGENT to a real contact address in .env.
 make ingest
 make universe
 make prices-yahoo
+env PYTHONPATH=src uv run --no-sync python -m finlab.engine.cli prepare
 make start
 make status
 ```
@@ -40,7 +42,7 @@ make stop
 | `start` | Start Data Engine, Analytics API and React |
 | `status` | Show PIDs and active listeners |
 | `stop` | Stop all local FinLab services |
-| `ingest` | Ingest the fixed SEC PoC universe |
+| `ingest` | Ingest the configured SEC research universe |
 | `prices-yahoo` | Backfill daily Yahoo OHLCV |
 | `universe` | Capture one immutable universe snapshot |
 | `submissions` | Backfill SEC filing metadata |
@@ -58,22 +60,22 @@ Override Yahoo dates with:
 make prices-yahoo START=1996-01-01 END=2026-11-21
 ```
 
-## Analytics views
+## Research workspace
 
-- **Overview**: warehouse and methodology summary.
-- **Ranking**: real descriptive ranking using earnings yield, momentum, volatility and maximum drawdown.
-- **Company**: selected issuer, latest filing, recent SEC facts and historical closes.
-- **Data**: warehouse counts and date coverage.
+Start in Overview for the benchmark, publication status and research candidates.
+Discover supports a sortable V2 screener and a separate legacy ranking. Company
+Research shows price history, score evidence and filing details. Model Validation,
+Strategies, Portfolio, Watchlist, and Data Center have separate destinations.
 
-Scores are descriptive research outputs, not guarantees of profit or unsupported buy/sell recommendations.
+The opportunity score summarizes relative evidence. The historical research
+reports disclose uncertainty, coverage and survivorship bias.
 
-## API
-
-- `GET /api/health`
-- `GET /api/universe`
-- `GET /api/warehouse/status`
-- `GET /api/warehouse/assets/{ticker}`
-- `GET /api/analytics/rankings?as_of=YYYY-MM-DD`
+- [Current architecture and Mermaid diagrams](docs/architecture.md)
+- [Source modules and HTTP endpoints](docs/code_guide.md)
+- [Scoring V2 formulas and results](docs/scoring_v2.md)
+- [V3 validation methodology and results](docs/validation_v3.md)
+- [Frontend design, run commands and verification](frontend/README.md)
+- [UX audit](docs/ui_ux_audit.md)
 
 ## Architecture invariants
 
@@ -87,4 +89,4 @@ Scores are descriptive research outputs, not guarantees of profit or unsupported
 
 Python 3.12, uv, DuckDB, Parquet, Polars, FastAPI, React 19, TypeScript, Vite, APScheduler, Pydantic, NumPy, pytest and Ruff.
 
-Full design: `docs/architecture.md`.
+Interactive API schemas are at `http://127.0.0.1:8000/docs`.

@@ -79,6 +79,7 @@ def historical_rankings(
     universe_ids: list[str] | None = None,
     factor_weights: dict[str, float] | None = None,
     settings=None,
+    filing_cutoff: date | None = None,
 ) -> dict:
     """End-of-day ranks using filed facts, completed closes and covered share bases."""
     cfg = settings or config.get_settings()
@@ -133,7 +134,7 @@ def historical_rankings(
             install_macros(con)
             observations = con.execute(
                 "SELECT cik,canonical,value,period_end,filed_date,accession_number FROM fundamentals_asof(?) WHERE duration_bucket='annual' AND canonical IN ('revenue','eps_diluted','net_income') ORDER BY cik,period_end DESC,filed_date DESC,canonical",
-                [as_of],
+                [filing_cutoff or as_of],
             ).fetchall()
             for cik, *record in observations:
                 facts[cik].append(tuple(record))

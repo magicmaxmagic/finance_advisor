@@ -176,5 +176,61 @@ def replay_command(report_path: str) -> None:
     typer.echo("Verified exact historical report replay")
 
 
+@app.command("validate-scores")
+def validate_scores(
+    start: str, end: str, stride: int = 21, cost_bps: float = 10, epoch: str | None = None
+) -> None:
+    """Print historical forward score comparisons over one pinned warehouse epoch."""
+    import json
+    from datetime import date
+
+    from finlab.research.score_validation import run_validation
+
+    typer.echo(
+        json.dumps(
+            run_validation(
+                date.fromisoformat(start),
+                date.fromisoformat(end),
+                stride=stride,
+                cost_bps=cost_bps,
+                epoch=epoch,
+            ),
+            allow_nan=False,
+        )
+    )
+
+
+@app.command("validate-signals")
+def validate_signals(
+    start: str,
+    end: str,
+    epoch: str | None = None,
+    stride: int = 21,
+    cost_bps: float = 10,
+    train: int = 12,
+    validation: int = 12,
+    embargo: int = 1,
+    rolling: bool = False,
+) -> None:
+    """Archive factor, ablation and walk-forward signal research."""
+    from datetime import date
+
+    from finlab.research.validation_v3 import run_v3
+
+    typer.echo(
+        run_v3(
+            date.fromisoformat(start),
+            date.fromisoformat(end),
+            epoch=epoch,
+            stride=stride,
+            cost_bps=cost_bps,
+            train=train,
+            validation=validation,
+            embargo=embargo,
+            rolling=rolling,
+        )
+    )
+
+
 if __name__ == "__main__":
     app()

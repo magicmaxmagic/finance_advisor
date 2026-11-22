@@ -1,4 +1,159 @@
-# Finlab — Architecture & Schema Design
+# FinLab architecture
+
+FinLab runs as two local applications over a versioned Parquet warehouse. The
+Data Engine ingests external data and owns the financial DuckDB write lock.
+Analytics reads a chosen publication in an in-memory DuckDB connection and serves
+deterministic research through FastAPI and React. The reporting and backtest ledger
+live outside the financial database.
+
+[Source code guide](code_guide.md) · [Scoring V2](scoring_v2.md) ·
+[Research methodology and results](validation_v3.md) · [Frontend architecture](../frontend/README.md)
+
+## Running system
+
+```mermaid
+flowchart LR
+    subgraph EX["External sources"]
+        SEC["SEC Company Facts and submissions"]
+        PRICES["Yahoo daily prices and corporate actions"]
+        LIST["Exchange symbol directories"]
+    end
+    subgraph ENGINE["Data Engine"]
+        Q["Scheduler and durable job queue"]
+        I["Provider adapters and validation"]
+        W["Single writer under file lock"]
+        P["Prepare and publish"]
+        Q --> I --> W --> P
+    end
+    subgraph STORE["Local storage"]
+        RAW["Raw provider responses"]
+        DB["DuckDB metadata and jobs"]
+        WORK["Working Parquet"]
+        SNAP["Immutable Parquet epoch"]
+        CTRL["Control inbox and status"]
+    end
+    subgraph ANALYTICS["Analytics"]
+        R["Pinned read connection"]
+        F["Point-in-time ratios, factors and scores"]
+        API["FastAPI"]
+        UI["React and Vite"]
+        LAB["Validation, portfolio and strategies"]
+        R --> F --> API --> UI
+        F --> LAB
+    end
+    SEC --> I
+    PRICES --> I
+    LIST --> I
+    I --> RAW
+    W --> DB
+    W --> WORK
+    WORK --> P --> SNAP --> R
+    API -. refresh request .-> CTRL
+    CTRL --> Q
+    LAB --> REPORTS["JSON archives and SQLite trial ledger"]
+```
+
+| Area | Running responsibilities |
+| --- | --- |
+| Ingestion | SEC Company Facts, submissions, dated universe snapshots, daily Yahoo OHLCV and corporate actions. Stooq bulk ingestion requires a compatible local archive. Alpaca and other historical adapters are separate from the published research API. |
+| Financial storage | The writer maintains native metadata and emits working Parquet. Facts and daily prices are accessed through explicit per-dataset Parquet views. |
+| Publication | A unique epoch contains immutable files. The publisher copies mutable inputs into a content-addressed object store and links epoch files to the immutable objects. A completed epoch and checksums precede the atomic update of `snapshots/latest.json`. |
+| Analytics | Pinned publication checks, canonical point-in-time facts, V2 company scores, separate legacy ranking and recommendation archives, portfolio analysis, strategies and V3 validation. |
+| Presentation | Vite proxies `/api` to FastAPI. The shell groups research, personal tools and operations. The refresh route writes a request to the control inbox for the engine. |
+| Optional and historical code | The deterministic application runs without an LLM. The older text, valuation and report design below includes placeholders and longer-term ideas. The source guide marks these explicitly. |
+
+## Read and publication lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Job as Data Engine job
+    participant Work as Working DuckDB and Parquet
+    participant Epoch as Snapshot publisher
+    participant Latest as Latest manifest
+    participant API as Analytics request
+    Job->>Work: Validate, merge and export
+    Job->>Work: Build concept mappings, Q4 and metrics
+    Job->>Epoch: Stage an immutable epoch
+    Epoch->>Epoch: Hash dataset paths and contents
+    Epoch->>Latest: Replace pointer after completion
+    API->>Latest: Resolve epoch or use pinned ID
+    API->>Epoch: Validate contract and checksums
+    API->>API: Attach read-only views and calculate as of the cutoff
+```
+
+The contract requires `entity`, `filing`, `security`, `concept_map`,
+`fundamentals_q4` and `metric`. Facts, prices, actions, dated universe,
+price ingestion and ticker history have independent availability. Hashes
+verify file integrity. Financial coverage is evaluated separately in Analytics.
+Unsuitable publications return HTTP 503 on warehouse-dependent routes.
+A reader remains pinned while a new epoch is published. There is no
+automatic retention policy. Keep epochs and code bundles referenced by research.
+
+## Data identities
+
+```mermaid
+erDiagram
+    ENTITY ||--o{ FILING : files
+    ENTITY ||--o{ SECURITY : identifies
+    FILING ||--o{ FACT : reports
+    SECURITY ||--o{ TICKER_HISTORY : uses
+    SECURITY ||--o{ PRICE_DAILY : trades
+    SECURITY ||--o{ CORPORATE_ACTION : has
+    SECURITY ||--o{ UNIVERSE_SNAPSHOT : appears_in
+    ENTITY {
+        int cik PK
+        string name
+    }
+    SECURITY {
+        string security_id PK
+        int cik
+        string ticker
+    }
+    FILING {
+        string accession_number PK
+        date filed_date
+    }
+    FACT {
+        bigint fact_key
+        string accession_number
+        date period_end
+        date filed_date
+    }
+    PRICE_DAILY {
+        string security_id
+        date date
+        string adjustment_basis
+    }
+```
+
+These are conceptual relationships across storage locations. The security
+catalogue also holds directory entries without a matching SEC issuer. Likewise,
+the large fact and price datasets use logical keys and published Parquet views.
+Numbered migrations and the baseline schema remain the source of truth for
+physical constraints.
+
+## Scheduling and failure handling
+
+The engine schedules prices and universe snapshots at 18:30 New York time on
+weekdays. The loader resolves the last completed market session. SEC discovery
+runs at 07:00 UTC, acceptance metadata at 07:30 and derived rebuilds at 08:00.
+Sunday jobs refresh company facts and check coverage. The first Sunday also
+schedules a historical price correction audit. Engine restarts reclaim
+interrupted jobs and enqueue price catch-up. Missed symbol-directory observations
+cannot be reconstructed from today's directory. The separate Analytics
+`research-daemon` schedules the weekly report for Saturday at noon UTC.
+
+See [deployment](../deploy/README.md) for systemd and launchd templates, and the
+[source guide](code_guide.md) for the command and HTTP contracts.
+
+## Original design archive
+
+The original schema and product design follows. It preserves historical
+decisions and proposals, including earlier publication, cloud inference and
+feature status descriptions. For current behavior use the sections above and
+the linked implementation guides.
+
+### Original architecture and schema design
 
 **Target host:** 1 server, 16 GB RAM, 500 GB SSD
 **Inference:** Ollama Cloud Pro (3 concurrent models, 5h session / 7d weekly quotas)

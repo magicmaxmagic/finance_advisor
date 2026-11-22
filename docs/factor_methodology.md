@@ -1,5 +1,7 @@
 # Deterministic factor methodology
 
+The company research assessment uses [Scoring v2](scoring_v2.md). The older methodology below is retained as implementation history for the original ranking experiment.
+
 Market factors v2 consume caller-supplied observations dated on or before the
 cutoff. Closes must be finite, positive and unique by security/date. Input basis
 is the supplied close series: these outputs are price returns, not guaranteed

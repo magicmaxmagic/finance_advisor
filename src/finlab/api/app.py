@@ -222,6 +222,44 @@ def data_refresh() -> dict:
     }
 
 
+@app.get("/api/analytics/discovery")
+def analytics_discovery(as_of: date | None = None):
+    from finlab.analytics.discovery import discovery
+
+    return discovery(as_of)
+
+
+@app.get("/api/warehouse/history/{security_id}")
+def warehouse_history(
+    security_id: str, as_of: date, limit: Annotated[int, Query(ge=1, le=10000)] = 10000
+):
+    from finlab.analytics.snapshot import attached_views, published_read_conn
+
+    with published_read_conn() as con:
+        if "price_daily" not in attached_views(con):
+            return {"prices": [], "benchmark": []}
+        prices = con.execute(
+            """SELECT date,close,volume FROM price_daily WHERE security_id=? AND date<=?
+            ORDER BY date DESC LIMIT ?""",
+            [security_id, as_of, limit],
+        ).fetchall()
+        benchmark = (
+            con.execute(
+                """SELECT p.date,p.close FROM price_daily p JOIN security s USING(security_id)
+            WHERE s.ticker='SPY' AND p.date BETWEEN ? AND ? ORDER BY p.date""",
+                [prices[-1][0], as_of],
+            ).fetchall()
+            if prices
+            else []
+        )
+    return {
+        "prices": [
+            {"date": day, "close": close, "volume": vol} for day, close, vol in reversed(prices)
+        ],
+        "benchmark": [{"date": day, "close": close} for day, close in benchmark],
+    }
+
+
 @app.get("/api/analytics/rankings")
 def analytics_rankings(as_of: Annotated[date | None, Query()] = None) -> dict:
     from finlab.analytics.rankings import historical_rankings
@@ -262,7 +300,9 @@ def company_factor_details(identity: str, as_of: date | None = None) -> dict:
     from finlab.analytics.company import company_factors
 
     try:
-        return company_factors(identity, as_of or date.today())
+        from finlab.analytics.status import latest_research_date
+
+        return company_factors(identity, as_of or latest_research_date())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { FinancialChart } from './FinancialChart'
+import { cash, pct } from './format'
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -7,32 +9,82 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return result as T
 }
 
-type StrategyResult = { metrics: Record<string, number | null>; equity: Array<{ date: string; value: number }>; caveats: string[] }
+type Equity = { date: string; value: number }[]
+type StrategyResult = {
+  start: string; end: string; strategy: string; tickers: string[]; metrics: Record<string, number | null>
+  benchmark_metrics: Record<string, number | null>; equity: Equity; benchmark_equity: Equity; caveats: string[]; warehouse_epoch: string
+}
+const strategyLabels = {
+  equal_weight: 'Monthly equal weight', buy_hold: 'Buy and hold', momentum: '12-minus-1 momentum',
+  value: 'Value', quality: 'Quality', multifactor: 'Legacy multifactor',
+} as const
+
+const scalar = (n?: number | null) => n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 3 })
 
 export function StrategyLab() {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [tickers, setTickers] = useState('SPY')
-  const [strategy, setStrategy] = useState('equal_weight')
+  const [strategy, setStrategy] = useState<keyof typeof strategyLabels>('equal_weight')
   const [result, setResult] = useState<StrategyResult | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [view, setView] = useState<'equity' | 'drawdown'>('equity')
   async function run() {
     setBusy(true); setError(''); setResult(null)
-    try { setResult(await post<StrategyResult>('/api/analytics/backtest', { start, end, tickers: tickers.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean), strategy })) }
+    try { setResult(await post('/api/analytics/backtest', { start, end, tickers: tickers.split(',').map(s => s.trim().toUpperCase()).filter(Boolean), strategy })) }
     catch (reason) { setError(String(reason)) }
     finally { setBusy(false) }
   }
-  const values = result?.equity.map((point) => point.value) ?? []
-  const low = values.length ? Math.min(...values) : 0
-  const high = values.length ? Math.max(...values) : 1
-  const points = values.map((value, index) => `${index * 620 / Math.max(values.length - 1, 1)},${150 - (value - low) * 140 / Math.max(high - low, 1)}`).join(' ')
-  return <section className="panel"><h2>Strategy Lab</h2><p>Simulation historique locale · signaux exécutés à l’ouverture suivante · 5 pb de frais et 5 pb de slippage par côté.</p>
-    <div className="toolbar"><label>Début<input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></label><label>Fin<input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></label><label>Titres séparés par virgules<input value={tickers} onChange={(e) => setTickers(e.target.value)} /></label><label>Stratégie<select value={strategy} onChange={(e) => setStrategy(e.target.value)}><option value="equal_weight">Pondération égale mensuelle</option><option value="buy_hold">Achat et conservation</option><option value="momentum">Momentum 12 moins 1</option><option value="value">Valeur</option><option value="quality">Qualité</option><option value="multifactor">Multifacteur</option></select></label><button disabled={busy || !start || !end} onClick={run}>{busy ? 'Calcul…' : 'Simuler'}</button></div>
-    {error && <p className="error">{error}</p>}{result && <><svg viewBox="0 0 620 160" role="img" aria-label="Valeur historique du portefeuille"><polyline points={points} fill="none" stroke="#52d7b4" strokeWidth="2" /></svg><p>{result.equity[0]?.date} → {result.equity.at(-1)?.date}</p><table><tbody>{Object.entries(result.metrics).map(([key, value]) => <tr key={key}><td>{key}</td><td>{value == null ? '—' : value.toFixed(4)}</td></tr>)}</tbody></table>{result.caveats.map((text) => <p key={text}>{text}</p>)}</>}
-  </section>
+  function chartSeries(series: Equity) {
+    let peak = 0
+    return series.map(point => {
+      peak = Math.max(peak, point.value)
+      return { date: point.date, close: view === 'equity' ? point.value / series[0].value * 100 : (point.value / peak - 1) * 100 }
+    })
+  }
+  return <>
+    <section className="panel">
+      <h2>Run a historical simulation</h2><p>Signals execute at the next open. The simulation uses 5 basis points of fees and 5 basis points of slippage per trade side.</p>
+      <form className="toolbar" onSubmit={event => { event.preventDefault(); void run() }}>
+        <label>Start date<input type="date" required value={start} onChange={event => setStart(event.target.value)} /></label>
+        <label>End date<input type="date" required min={start || undefined} value={end} onChange={event => setEnd(event.target.value)} /></label>
+        <label>Tickers, separated by commas<input required value={tickers} onChange={event => setTickers(event.target.value)} /></label>
+        <label>Strategy<select value={strategy} onChange={event => setStrategy(event.target.value as keyof typeof strategyLabels)}>
+          {Object.entries(strategyLabels).map(([key,label]) => <option key={key} value={key}>{label}</option>)}
+        </select></label>
+        <button className="primary" disabled={busy || !start || !end || start >= end}>{busy ? 'Simulating…' : 'Run simulation'}</button>
+      </form>
+      {busy && <p role="status">Running against the local warehouse…</p>}{error && <p className="error" role="alert">{error}</p>}
+    </section>
+    {result && <>
+      <section className="panel"><h2>{strategyLabels[result.strategy as keyof typeof strategyLabels] ?? result.strategy}</h2>
+        <p>{result.start} to {result.end} · {result.tickers.join(', ')} · Benchmark SPY</p>
+        <p>Historical simulation. The Model Validation section contains the separate walk-forward study.</p>
+        <div className="table-wrap"><table><thead><tr><th>Measure</th><th>Strategy</th><th>SPY</th></tr></thead>
+          <tbody>{Object.entries({ cagr: 'Annualized return', sharpe: 'Sharpe ratio', sortino: 'Sortino ratio', max_drawdown: 'Maximum drawdown', information_ratio: 'Information ratio' }).map(([key,label]) =>
+            <tr key={key}><th scope="row">{label}</th><td>{key === 'cagr' || key === 'max_drawdown' ? pct(result.metrics[key]) : scalar(result.metrics[key])}</td>
+            <td>{key === 'cagr' || key === 'max_drawdown' ? pct(result.benchmark_metrics[key]) : scalar(result.benchmark_metrics[key])}</td></tr>)}</tbody></table></div>
+      </section>
+      <div className="segments" aria-label="Strategy chart"><button type="button" aria-pressed={view === 'equity'} onClick={() => setView('equity')}>Equity curve</button>
+        <button type="button" aria-pressed={view === 'drawdown'} onClick={() => setView('drawdown')}>Drawdown</button></div>
+      <FinancialChart points={chartSeries(result.equity)} benchmark={chartSeries(result.benchmark_equity)}
+        label={view === 'equity' ? 'Equity indexed to 100' : 'Drawdown (%)'} comparisonRebased={false}
+        initialOverlays={['SPY']} initialRange="MAX" showPriceTools={false} />
+      <details className="panel"><summary>Assumptions and all results</summary>
+        <ul>{result.caveats.map(text => <li key={text}>{text}</li>)}</ul>
+        <pre>{JSON.stringify(result.metrics, null, 2)}</pre>
+      </details>
+    </>}
+  </>
 }
 
+type Holdings = {
+  base_currency: string; market_value: number; realized_pnl: number; unrealized_pnl: number
+  holdings: { security_id: string; quantity: number; price_date: string; market_value: number; weight: number }[]
+  risk?: { annualized_volatility?: number }
+}
+type PortfolioResult = { result: Holdings | { before: Holdings; after: Holdings }; assumptions: string[] }
 export function PortfolioPanel() {
   const [csv, setCsv] = useState(() => localStorage.getItem('finlab-portfolio-csv') ?? 'date,security_id,side,quantity,price,currency,fx_to_base,fee\n')
   const [asOf, setAsOf] = useState('')
@@ -40,51 +92,95 @@ export function PortfolioPanel() {
   const [fx, setFx] = useState('')
   const [scenario, setScenario] = useState('')
   const [amount, setAmount] = useState('')
-  const [result, setResult] = useState<unknown>(null)
+  const [result, setResult] = useState<PortfolioResult | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  function updateCsv(text: string) { setCsv(text); localStorage.setItem('finlab-portfolio-csv', text) }
+  function save(text: string) { setCsv(text); localStorage.setItem('finlab-portfolio-csv', text) }
   async function run() {
     setBusy(true); setError(''); setResult(null)
-    try { setResult(await post('/api/portfolio/analyze', { csv_data: csv, as_of: asOf, base_currency: base, foreign_fx: fx ? Number(fx) : undefined, scenario_security: scenario || undefined, scenario_amount: scenario ? Number(amount) : undefined })) }
+    try { setResult(await post('/api/portfolio/analyze', { csv_data: csv, as_of: asOf, base_currency: base, foreign_fx: fx ? Number(fx) : undefined,
+      scenario_security: scenario || undefined, scenario_amount: scenario ? Number(amount) : undefined })) }
     catch (reason) { setError(String(reason)) }
     finally { setBusy(false) }
   }
-  return <section className="panel"><h2>Portfolio Intelligence</h2><p>Saisissez les transactions buy/sell ou importez un CSV. security_id accepte un identifiant stable ou un ticker unique. fx_to_base est le taux à la date de chaque transaction. Le CSV est conservé dans ce navigateur.</p>
-    <input type="file" accept=".csv,text/csv" onChange={async (e) => { const file = e.target.files?.[0]; if (file) updateCsv(await file.text()) }} />
-    <textarea aria-label="Transactions CSV" rows={10} value={csv} onChange={(e) => updateCsv(e.target.value)} style={{ width: '100%' }} />
-    <div className="toolbar"><label>Date de valorisation<input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></label><label>Devise de base<select value={base} onChange={(e) => setBase(e.target.value)}><option>USD</option><option>CAD</option></select></label><label>FX de valorisation étrangère vers base<input type="number" min="0" step="any" value={fx} onChange={(e) => setFx(e.target.value)} /></label><label>Scénario : ticker à ajouter<input value={scenario} onChange={(e) => setScenario(e.target.value)} /></label><label>Apport dans la devise de base<input type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} /></label><button disabled={busy || !asOf} onClick={run}>{busy ? 'Calcul…' : 'Analyser'}</button></div>
-    {error && <p className="error">{error}</p>}{result != null && <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(result, null, 2)}</pre>}
-  </section>
+  const values = result?.result
+  const positions = values && ('after' in values ? values.after : values)
+  return <>
+    <section className="panel">
+      <h2>Value a portfolio</h2><p>Upload or edit a transaction CSV. Its contents are saved in this browser.</p>
+      <label className="field">Import transaction CSV<input type="file" accept=".csv,text/csv" onChange={async event => {
+        const file = event.target.files?.[0]
+        if (!file) return
+        try { save(await file.text()); setError('') } catch { setError('Could not read the selected file.') }
+      }} /></label>
+      <label className="field">Transactions<textarea rows={5} value={csv} onChange={event => save(event.target.value)} /></label>
+      <details><summary>CSV format</summary><p>Use buy or sell for side, a stable security ID or unique ticker, and the transaction-date FX rate for fx_to_base. Use 1 for transactions already in the base currency.</p></details>
+      <form className="toolbar" onSubmit={event => { event.preventDefault(); void run() }}>
+        <label>Valuation date<input type="date" value={asOf} onChange={event => setAsOf(event.target.value)} required /></label>
+        <label>Base currency<select value={base} onChange={event => setBase(event.target.value)}><option>USD</option><option>CAD</option></select></label>
+        <label>Foreign-to-base valuation FX<input type="number" min="0.000001" step="any" value={fx} onChange={event => setFx(event.target.value)} /></label>
+        <label>Scenario ticker<input value={scenario} onChange={event => setScenario(event.target.value)} /></label>
+        <label>Scenario investment<input type="number" min="0.01" step="any" required={!!scenario} value={amount} onChange={event => setAmount(event.target.value)} /></label>
+        <button className="primary" disabled={busy || !asOf}>{busy ? 'Analyzing…' : 'Analyze holdings'}</button>
+      </form>
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+    {positions && <section className="panel"><h2>{values && 'after' in values ? 'Scenario holdings' : 'Portfolio holdings'}</h2>
+      {values && 'before' in values && <p>Before {cash(values.before.market_value, positions.base_currency)} · After {cash(values.after.market_value, positions.base_currency)}</p>}
+      <p>Market value {cash(positions.market_value, positions.base_currency)} · Unrealized P/L {cash(positions.unrealized_pnl, positions.base_currency)} · Realized P/L {cash(positions.realized_pnl, positions.base_currency)}</p>
+      <p>Estimated annual volatility {pct(positions.risk?.annualized_volatility)}</p>
+      <div className="table-wrap"><table><thead><tr><th>Security</th><th>Quantity</th><th>Quote date</th><th>Value</th><th>Weight</th></tr></thead><tbody>
+        {positions.holdings.map(item => <tr key={item.security_id}><th scope="row">{item.security_id}</th><td>{scalar(item.quantity)}</td><td>{item.price_date}</td>
+          <td>{cash(item.market_value, positions.base_currency)}</td><td>{pct(item.weight)}</td></tr>)}</tbody></table></div>
+      <details><summary>Assumptions and full results</summary><ul>{result?.assumptions.map(text => <li key={text}>{text}</li>)}</ul><pre>{JSON.stringify(values, null, 2)}</pre></details>
+    </section>}
+  </>
 }
 
-
-type EngineState = { updated_at: string | null; pipeline_state: string; steps: Array<{ name: string; state: string; detail: string }> }
-type QualityState = { scope: string; rows: Array<{ ticker: string; status: string; missing_sessions?: string[] }> }
+type EngineState = { updated_at: string | null; pipeline_state: string; steps: { name: string; state: string; detail: string }[] }
+type QualityState = { scope: string; rows: { ticker: string; status: string; missing_sessions?: string[] }[] }
 
 export function DataCenterControls() {
   const [status, setStatus] = useState<EngineState | null>(null)
   const [quality, setQuality] = useState<QualityState | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [confirm, setConfirm] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch('/api/data/status', { signal: controller.signal }).then(response => {
+      if (!response.ok) throw new Error('Engine status unavailable.')
+      return response.json()
+    }).then(setStatus).catch(error => { if (!controller.signal.aborted) setMessage(String(error)) })
+    return () => controller.abort()
+  }, [])
   async function inspect() {
-    setBusy(true)
+    setBusy(true); setMessage('')
     try {
       const responses = await Promise.all([fetch('/api/data/status'), fetch('/api/warehouse/quality')])
-      const payloads = await Promise.all(responses.map((response) => response.json()))
-      if (!responses.every((response) => response.ok)) throw new Error('Publication locale indisponible.')
-      setStatus(payloads[0]); setQuality(payloads[1])
+      if (!responses.every(response => response.ok)) throw new Error('Published quality details are unavailable.')
+      const [engine,coverage] = await Promise.all(responses.map(response => response.json()))
+      setStatus(engine); setQuality(coverage)
     } catch (reason) { setMessage(String(reason)) }
     finally { setBusy(false) }
   }
   async function refresh() {
-    setBusy(true)
-    try { const response = await post<{ message: string }>('/api/data/refresh', {}); setMessage(response.message) }
+    setBusy(true); setConfirm(false)
+    try { setMessage((await post<{ message: string }>('/api/data/refresh', {})).message) }
     catch (reason) { setMessage(String(reason)) }
     finally { setBusy(false) }
   }
-  return <section className="panel"><h3>Synchronisation et qualité</h3><button disabled={busy} onClick={inspect}>Vérifier l’état local</button> <button disabled={busy} onClick={refresh}>Demander une synchronisation</button>
-    <p>{message}</p>{status && <><p>{status.pipeline_state} · {status.updated_at ?? 'Aucun statut publié'}</p>{status.steps.map((step) => <p key={step.name}>{step.name}: {step.state} · {step.detail}</p>)}</>}
-    {quality && <><p>{quality.scope}</p><table><thead><tr><th>Titre</th><th>État</th><th>Séances manquantes</th></tr></thead><tbody>{quality.rows.map((row) => <tr key={row.ticker}><td>{row.ticker}</td><td>{row.status}</td><td>{row.missing_sessions?.length ?? '—'}</td></tr>)}</tbody></table></>}
+  return <section className="panel"><h2>Ingestion and quality</h2>
+    <p>{status ? `${status.pipeline_state.replaceAll('_', ' ')} · ${status.updated_at ? new Date(status.updated_at).toLocaleString('en-US') : 'No status timestamp'}` : 'Loading Data Engine status…'}</p>
+    <div className="toolbar"><button type="button" disabled={busy} onClick={inspect}>Inspect coverage</button>
+      <button type="button" className="primary" disabled={busy || confirm} onClick={() => setConfirm(true)}>Request synchronization</button></div>
+    {confirm && <div role="group" aria-label="Confirm synchronization"><p>Queue a synchronization for the local Data Engine?</p>
+      <button type="button" onClick={refresh}>Confirm request</button> <button type="button" onClick={() => setConfirm(false)}>Cancel</button></div>}
+    {message && <p role="status">{message}</p>}
+    {status?.steps.length ? <details><summary>Ingestion job details</summary><ul>{status.steps.map(step => <li key={step.name}>{step.name} · {step.state} · {step.detail}</li>)}</ul></details> : null}
+    {quality && <details open><summary>Security coverage</summary><p>{quality.scope}</p>
+      <div className="table-wrap"><table><thead><tr><th>Ticker</th><th>State</th><th>Missing sessions</th></tr></thead>
+        <tbody>{quality.rows.map(row => <tr key={row.ticker}><th scope="row">{row.ticker}</th><td>{row.status}</td><td>{row.missing_sessions?.length ?? '—'}</td></tr>)}</tbody>
+      </table></div></details>}
   </section>
 }
