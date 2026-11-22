@@ -33,6 +33,7 @@ type Ranking = {
   normalization?: Record<string, string>
 }
 type Rankings = { as_of: string; method: string; rows: Ranking[]; freshness?: { status: string } }
+type Assessment = { assessment: { model_version:string; opportunity_score:number|null; fundamental_score:number|null; technical_score:number|null; risk_resilience_score:number|null; weights:Record<string,number>; score_groups:Record<string,Record<string,number|null>>; contradictions:string[]; explanations:string[]; options_context:{status:string;reason:string}; weight_status:string }; fundamental_factors:{as_of:string;factors:Record<string,{value:number|null;status:string;definition:string}>}; market_factors:{factor:string;value:number|null;data_status:string}[]; warehouse_epoch:string }
 type WarehouseAsset = {
   ticker: string
   available: boolean
@@ -60,6 +61,8 @@ function App() {
   const [warehouse, setWarehouse] = useState<WarehouseStatus | null>(null)
   const [selected, setSelected] = useState('AAPL')
   const [asset, setAsset] = useState<WarehouseAsset | null>(null)
+  const [assessment, setAssessment] = useState<Assessment | null>(null)
+  const [quantMode, setQuantMode] = useState(false)
   const [page, setPage] = useState<'Overview' | 'Ranking' | 'Company' | 'Data' | 'Strategy Lab' | 'Portfolio'>('Ranking')
   const [sector, setSector] = useState('Tous')
   const [query, setQuery] = useState('')
@@ -86,6 +89,14 @@ function App() {
     readLocal<WarehouseAsset>(`/api/warehouse/assets/${selected}${effectiveDate ? `?as_of=${effectiveDate}` : ''}`)
       .then((data) => { if (active) setAsset(data) })
       .catch(() => { if (active) setAsset(null) })
+    return () => { active = false }
+  }, [selected, effectiveDate])
+
+  useEffect(() => {
+    let active = true
+    readLocal<Assessment>(`/api/analytics/factors/${selected}${effectiveDate ? `?as_of=${effectiveDate}` : ''}`)
+      .then((data) => { if (active) setAssessment(data) })
+      .catch(() => { if (active) setAssessment(null) })
     return () => { active = false }
   }, [selected, effectiveDate])
 
@@ -181,7 +192,7 @@ function App() {
               <>
                 <div className="company-header"><div><p className="eyebrow">{asset.company?.sector}</p><h2>{asset.company?.name}</h2><small>{asset.ticker} · CIK {asset.company?.cik}</small></div>{warehouse && <div className="score-ring"><strong>{rankings?.rows.find((row) => row.ticker === asset.ticker)?.score?.toFixed(1) ?? '—'}</strong><span>score</span></div>}</div>
                 <section className="panel"><h3>Explication du classement historique</h3><p>Facteurs pondérés : valeur, qualité, croissance, momentum et risque. Les rangs sectoriels utilisent le marché global quand le secteur compte moins de trois observations valides.</p><div className="fact-list">{Object.entries(rankings?.rows.find((row) => row.ticker === asset.ticker)?.factor_scores ?? {}).map(([factor, score]) => <div key={factor}><strong>{factor}</strong><span>{score == null ? 'Données insuffisantes' : `${score.toFixed(1)} / 100`}</span><small>{score == null ? '' : score > 55 ? 'Signal relatif positif' : score < 45 ? 'Signal relatif négatif' : 'Neutre'}</small></div>)}</div><p>Le classement ne garantit pas un rendement futur. Les univers historiques incomplets et les révisions des fournisseurs limitent son interprétation.</p></section>
-                <div className="company-grid">
+                <section className="panel"><h3>Évaluation multidimensionnelle</h3><p>{assessment?.assessment.model_version ?? 'Évaluation indisponible'} · Publication {assessment?.warehouse_epoch ?? '—'}</p><div className="fact-list">{[['Opportunité',assessment?.assessment.opportunity_score],['Fondamentaux',assessment?.assessment.fundamental_score],['Technique',assessment?.assessment.technical_score],['Résilience au risque',assessment?.assessment.risk_resilience_score]].map(([label,value])=><div key={String(label)}><strong>{label}</strong><span>{typeof value==='number'?`${value.toFixed(1)} / 100`:'Données insuffisantes'}</span></div>)}</div><button onClick={()=>setQuantMode(!quantMode)}>{quantMode?'Mode simple':'Mode quantitatif'}</button><p>{assessment?.assessment.weight_status}</p><p>Options : {assessment?.assessment.options_context.reason ?? 'Non disponible'}</p><h4>Signaux concordants</h4>{assessment?.assessment.explanations.map(x=><p key={x}>{x}</p>)}<h4>Contradictions</h4>{assessment?.assessment.contradictions.length?assessment.assessment.contradictions.map(x=><p key={x}>{x}</p>):<p>Aucune contradiction détectable avec les métriques disponibles.</p>}<h4>Fondamentaux</h4><div className="fact-list">{Object.entries(assessment?.fundamental_factors.factors??{}).map(([key,item])=><details key={key}><summary><strong>{key}</strong> · {item.value==null?'Indisponible':item.value.toLocaleString('fr-FR',{maximumFractionDigits:3})}</summary><p>{item.definition}</p><small>{quantMode?`${item.status} · as of ${assessment?.fundamental_factors.as_of??effectiveDate} · modèle ${assessment?.assessment.model_version}`:'Indicateur calculé uniquement lorsque les données SEC alignées sont disponibles.'}</small></details>)}</div><h4>Marché et risque</h4><div className="fact-list">{assessment?.market_factors.map(item=><div key={item.factor}><strong>{item.factor}</strong><span>{item.value==null?'Indisponible':item.value.toLocaleString('fr-FR',{maximumFractionDigits:4})}</span><small>{item.data_status}</small></div>)}</div></section><div className="company-grid">
                   <article><span>Dernier filing</span><strong>{asset.latest_filing?.form ?? '—'}</strong><small>{asset.latest_filing?.filed_date ?? '—'}</small></article>
                   <article><span>Prix disponible</span><strong>{asset.prices.length ? money(asset.prices[asset.prices.length - 1].close) : '—'}</strong><small>{asset.prices.length ? asset.prices[asset.prices.length - 1].date : 'Pas de prix'}</small></article>
                   <article><span>Facts récents</span><strong>{asset.facts.length}</strong><small>observations SEC</small></article>

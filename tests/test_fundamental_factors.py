@@ -58,3 +58,10 @@ def test_negative_growth_base_and_missing_periods_are_unavailable():
     values = calculate_fundamentals(facts, ASOF)["factors"]
     assert values["earnings_growth"]["value"] is None
     assert values["fcf_yield"]["status"] == "insufficient_aligned_inputs"
+
+
+def test_profitable_multiple_requires_positive_denominator_and_market_value():
+    facts = [observation("revenue", 2021, 100), observation("net_income", 2021, -5)]
+    values = calculate_fundamentals(facts, ASOF, market_cap=200)["factors"]
+    assert values["trailing_pe"]["value"] is None
+    assert values["earnings_yield"]["value"] is None

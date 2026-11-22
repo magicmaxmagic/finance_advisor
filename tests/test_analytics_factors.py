@@ -115,3 +115,29 @@ def test_market_beta_matches_identical_benchmark_and_risk_metrics_exist():
     assert factors["beta"] == pytest.approx(1)
     assert factors["downside_volatility"] > 0
     assert factors["cvar_95"] >= factors["var_95"]
+
+
+def test_extended_trend_features_use_full_windows_and_explicit_status():
+    as_of = date(2025, 1, 1)
+    days = [as_of - timedelta(days=i) for i in range(500, -1, -1)]
+    n = len(days)
+    prices = pl.DataFrame(
+        {
+            "security_id": ["A"] * n,
+            "date": days,
+            "close": [100 + i * 0.1 for i in range(n)],
+            "high": [101 + i * 0.1 for i in range(n)],
+            "low": [99 + i * 0.1 for i in range(n)],
+            "volume": [1000 + i for i in range(n)],
+        }
+    )
+    result = calculate_market_factors(
+        prices, prices.with_columns(pl.lit("SPY").alias("security_id")), as_of
+    )
+    values = dict(zip(result["factor"], result["value"], strict=True))
+    assert values["ma20"] is not None and values["ma100"] is not None
+    assert values["ema200"] is not None and values["price_to_sma200"] > 0
+    assert values["golden_cross"] == 1.0
+    assert values["atr14"] > 0 and values["adx14"] is not None
+    assert values["relative_volume20"] is not None
+    assert values["bollinger_upper"] > values["bollinger_lower"]

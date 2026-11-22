@@ -8,7 +8,7 @@ import polars as pl
 
 from finlab.research.stats import performance_metrics
 
-FACTOR_CALCULATION_VERSION = "market-factors-v2"
+FACTOR_CALCULATION_VERSION = "market-factors-v3"
 
 
 def calculate_market_factors(
@@ -96,8 +96,36 @@ def calculate_market_factors(
         peak = frame["close"].cum_max()
         drawdown = float((frame["close"] / peak - 1).min())
 
+        ma20 = float(closes.tail(20).mean()) if trading_days >= 20 else None
         ma50 = float(closes.tail(50).mean()) if trading_days >= 50 else None
+        ma100 = float(closes.tail(100).mean()) if trading_days >= 100 else None
         ma200 = float(closes.tail(200).mean()) if trading_days >= 200 else None
+        ema20 = float(closes.ewm_mean(span=20, adjust=False)[-1])
+        ema50 = float(closes.ewm_mean(span=50, adjust=False)[-1])
+        ema200 = float(closes.ewm_mean(span=200, adjust=False)[-1])
+        bb_mid = ma20
+        bb_std = float(closes.tail(20).std(ddof=1)) if trading_days >= 20 else None
+        tr = _true_ranges(frame)
+        atr14 = sum(tr[-14:]) / 14 if len(tr) >= 14 else None
+        adx14 = _adx(frame)
+        volume = frame["volume"] if "volume" in frame.columns else None
+        relative_volume = (
+            float(volume[-1]) / float(volume.tail(20).mean())
+            if volume is not None and trading_days >= 20 and float(volume.tail(20).mean()) > 0
+            else None
+        )
+        high52 = (
+            max(_as_list(frame["high"]))
+            if "high" in frame.columns and trading_days >= 252
+            else None
+        )
+        price_to_sma200 = latest / ma200 - 1 if ma200 else None
+        sma200_slope = ma200 / float(closes[-400:-200].mean()) - 1 if trading_days >= 400 else None
+        golden_cross = (
+            bool(ma50 and ma200 and ma50 > ma200)
+            if ma50 is not None and ma200 is not None
+            else None
+        )
         rsi = _rsi(closes)
         macd = _macd(closes)
 
@@ -132,8 +160,26 @@ def calculate_market_factors(
             **returns,
             "annualized_volatility": volatility,
             "max_drawdown": drawdown,
+            "ma20": ma20,
             "ma50": ma50,
+            "ma100": ma100,
             "ma200": ma200,
+            "ema20": ema20,
+            "ema50": ema50,
+            "ema200": ema200,
+            "price_to_sma200": price_to_sma200,
+            "sma200_slope": sma200_slope,
+            "golden_cross": golden_cross,
+            "bollinger_upper": bb_mid + 2 * bb_std
+            if bb_mid is not None and bb_std is not None
+            else None,
+            "bollinger_lower": bb_mid - 2 * bb_std
+            if bb_mid is not None and bb_std is not None
+            else None,
+            "atr14": atr14,
+            "adx14": adx14,
+            "relative_volume20": relative_volume,
+            "distance_from_52w_high": latest / high52 - 1 if high52 else None,
             "rsi": rsi,
             "macd": macd,
         }
@@ -179,3 +225,39 @@ def _macd(closes: pl.Series) -> float | None:
     ema26 = closes.ewm_mean(span=26, adjust=False)
     macd_series = ema12 - ema26
     return float(macd_series[-1])
+
+
+def _as_list(series):
+    return [float(value) for value in series.to_list()]
+
+
+def _true_ranges(frame):
+    if not {"high", "low"}.issubset(frame.columns):
+        return []
+    highs, lows, closes = map(_as_list, (frame["high"], frame["low"], frame["close"]))
+    return [
+        max(high - lows[i], abs(high - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        for i, high in enumerate(highs)
+        if i > 0
+    ]
+
+
+def _adx(frame, window=14):
+    if not {"high", "low", "close"}.issubset(frame.columns) or frame.height < 2 * window + 1:
+        return None
+    highs, lows, closes = map(_as_list, (frame["high"], frame["low"], frame["close"]))
+    plus, minus, ranges = [], [], []
+    for i in range(1, len(closes)):
+        up, down = highs[i] - highs[i - 1], lows[i - 1] - lows[i]
+        plus.append(up if up > down and up > 0 else 0)
+        minus.append(down if down > up and down > 0 else 0)
+        ranges.append(
+            max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        )
+    dx = []
+    for i in range(window - 1, len(ranges)):
+        atr = sum(ranges[i - window + 1 : i + 1])
+        p = 100 * sum(plus[i - window + 1 : i + 1]) / atr if atr else 0
+        m = 100 * sum(minus[i - window + 1 : i + 1]) / atr if atr else 0
+        dx.append(100 * abs(p - m) / (p + m) if p + m else 0)
+    return sum(dx[-window:]) / window if len(dx) >= window else None

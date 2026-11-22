@@ -83,6 +83,172 @@ def company_factors(identity: str, as_of: date) -> dict:
             [as_of],
         ).pl()
         technical = calculate_market_factors(prices, benchmark, as_of)
+        tech = {r["factor"]: r["value"] for r in technical.to_dicts()}
+        fundamental = {key: item["value"] for key, item in fundamentals["factors"].items()}
+
+        # Transparent monotonic transforms into 0-100 domain scores. These
+        # are rule-based starting scores; no predictive calibration is claimed.
+        def transform(key, value):
+            if value is None:
+                return None
+            if key in {"earnings_yield", "fcf_yield", "cash_to_debt"}:
+                return 50 + 500 * value
+            if key in {
+                "price_to_sales",
+                "price_to_book",
+                "ev_to_operating_ebitda",
+                "ev_to_ebit",
+                "ev_to_revenue",
+                "trailing_pe",
+                "price_to_fcf",
+            }:
+                return 100 - 10 * max(0, value)
+            if key in {"net_debt_to_ebitda", "debt_to_equity"}:
+                return 100 - 20 * max(0, value)
+            if key in {"current_ratio", "interest_coverage"}:
+                return min(100, value * 25)
+            if key in {"annualized_volatility", "downside_volatility"}:
+                return 100 - 150 * value
+            if key in {"max_drawdown", "var_95", "cvar_95"}:
+                return 100 + 100 * value
+            if key == "beta":
+                return 100 - 20 * abs(value - 1)
+            if key == "rsi":
+                return 100 - abs(value - 55) * 1.5
+            if key == "golden_cross":
+                return 75 if value else 25
+            if key == "relative_volume20":
+                return 50 + 20 * max(-2, min(2, value - 1))
+            return 50 + 100 * value
+
+        def average(keys, source, minimum=2):
+            vals = [transform(key, source.get(key)) for key in keys]
+            vals = [
+                max(0, min(100, float(v)))
+                for v in vals
+                if v is not None and isinstance(v, (int, float))
+            ]
+            return round(sum(vals) / len(vals), 1) if len(vals) >= minimum else None
+
+        fundamental_groups = {
+            "valuation": average(
+                [
+                    "earnings_yield",
+                    "fcf_yield",
+                    "price_to_sales",
+                    "price_to_book",
+                    "ev_to_operating_ebitda",
+                ],
+                fundamental,
+            ),
+            "profitability": average(
+                [
+                    "roic",
+                    "roe",
+                    "roa",
+                    "gross_margin",
+                    "operating_margin",
+                    "net_margin",
+                    "ebitda_margin",
+                    "fcf_margin",
+                ],
+                fundamental,
+            ),
+            "growth": average(
+                ["revenue_growth", "earnings_growth", "fcf_growth", "growth_acceleration"],
+                fundamental,
+            ),
+            "financial_health": average(
+                [
+                    "net_debt_to_ebitda",
+                    "debt_to_equity",
+                    "cash_to_debt",
+                    "current_ratio",
+                    "interest_coverage",
+                ],
+                fundamental,
+            ),
+            "cash_flow_quality": average(["cash_flow_quality", "fcf_margin"], fundamental, 1),
+        }
+        technical_groups = {
+            "trend": average(["price_to_sma200", "sma200_slope", "golden_cross"], tech),
+            "momentum": average(
+                ["return_3m", "return_6m", "return_12m", "relative_momentum_12m"], tech
+            ),
+            "confirmation": average(["rsi", "macd", "adx14", "relative_volume20"], tech),
+        }
+        risk_groups = {
+            "market_risk": average(
+                [
+                    "annualized_volatility",
+                    "downside_volatility",
+                    "max_drawdown",
+                    "beta",
+                    "var_95",
+                    "cvar_95",
+                ],
+                tech,
+            ),
+            "balance_sheet": average(
+                ["net_debt_to_ebitda", "debt_to_equity", "current_ratio"], fundamental
+            ),
+        }
+
+        def dimension(groups, minimum):
+            present = [v for v in groups.values() if v is not None]
+            return round(sum(present) / len(present), 1) if len(present) >= minimum else None
+
+        dimension_scores = {
+            "fundamental": dimension(fundamental_groups, 3),
+            "technical": dimension(technical_groups, 2),
+            "risk": dimension(risk_groups, 2),
+        }
+        score_groups = {
+            "fundamental": fundamental_groups,
+            "technical": technical_groups,
+            "risk": risk_groups,
+        }
+        weights = {"fundamental": 0.60, "technical": 0.25, "risk": 0.15}
+        opportunity = (
+            round(sum(dimension_scores[k] * w for k, w in weights.items()), 1)
+            if all(v is not None for v in dimension_scores.values())
+            else None
+        )
+        technical_score, fundamental_score = (
+            dimension_scores["technical"],
+            dimension_scores["fundamental"],
+        )
+        contradictions = []
+        if fundamental_score is not None and technical_score is not None:
+            if fundamental_score >= 60 and technical_score < 40:
+                contradictions.append("Strong fundamentals / weak technical trend")
+            if fundamental_score < 40 and (tech.get("return_12m") or 0) > 0.15:
+                contradictions.append("Weak fundamentals / strong momentum")
+        if (
+            fundamental.get("earnings_yield")
+            and fundamental["earnings_yield"] > 0.08
+            and fundamental.get("net_margin") is not None
+            and fundamental["net_margin"] < 0
+        ):
+            contradictions.append("Attractive earnings yield with deteriorating profitability")
+        statements = []
+        if (
+            tech.get("price_to_sma200") is not None
+            and tech["price_to_sma200"] < 0
+            and tech.get("sma200_slope") is not None
+            and tech["sma200_slope"] < 0
+        ):
+            statements.append("Price is below a declining 200-day average.")
+        if fundamental_score is not None and fundamental_score >= 60:
+            statements.append(
+                "Available fundamental groups are relatively favorable under the initial rules."
+            )
+        if (
+            tech.get("return_12m") is not None
+            and tech["return_12m"] > 0
+            and (tech.get("relative_momentum_12m") or 0) > 0
+        ):
+            statements.append("Twelve-month momentum is positive and ahead of SPY.")
         return dict(
             security_id=sid,
             ticker=ticker,
@@ -92,4 +258,24 @@ def company_factors(identity: str, as_of: date) -> dict:
             reported_share_market_cap=market_cap,
             market_cap_inputs=market_cap_inputs,
             market_factors=technical.to_dicts(),
+            assessment={
+                "model_version": "hierarchical-equity-assessment-v1",
+                "opportunity_score": opportunity,
+                "fundamental_score": dimension_scores["fundamental"],
+                "technical_score": dimension_scores["technical"],
+                "risk_resilience_score": dimension_scores["risk"],
+                "weights": weights,
+                "score_groups": score_groups,
+                "coverage": {
+                    k: sum(v is not None for v in g.values()) / len(g)
+                    for k, g in score_groups.items()
+                },
+                "contradictions": contradictions,
+                "explanations": statements,
+                "options_context": {
+                    "status": "unavailable",
+                    "reason": "No options snapshots in the local warehouse; excluded from scores.",
+                },
+                "weight_status": "Unvalidated starting weights; not a probability of return.",
+            },
         )

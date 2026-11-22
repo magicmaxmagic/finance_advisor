@@ -7,6 +7,18 @@ from statistics import pstdev
 
 DEFINITIONS = {
     "net_margin": "Annual parent net income / annual revenue, same reporting period.",
+    "trailing_pe": "Latest price / split-adjusted annual diluted EPS; negative EPS is unavailable.",
+    "gross_margin": "(Revenue - reported cost of revenue) / revenue.",
+    "ebitda_margin": "(Operating income + reported D&A) / revenue.",
+    "roa": "Annual net income / average total assets.",
+    "ev_to_ebit": "(Market capitalization + verified debt + preferred equity + NCI - cash) / operating income.",
+    "ev_to_revenue": "Same simplified EV / annual revenue.",
+    "price_to_fcf": "Market capitalization / positive annual free cash flow.",
+    "net_debt_to_ebitda": "(Verified debt - cash) / positive operating income plus D&A.",
+    "debt_to_equity": "Verified debt / positive parent equity.",
+    "cash_to_debt": "Cash / verified debt.",
+    "current_ratio": "Current assets / current liabilities.",
+    "interest_coverage": "Operating income / reported interest expense.",
     "operating_margin": "Annual operating income / annual revenue, same reporting period.",
     "fcf_margin": "(Annual operating cash flow - selected capital expenditures) / annual revenue.",
     "cash_flow_quality": "Annual operating cash flow / positive annual net income.",
@@ -97,14 +109,78 @@ def calculate_fundamentals(
             fact("operating_income", day),
         )
         free_cash = fcf(day)
+        equity = parent_equity(day)
         values.update(
             net_margin=divide(income, revenue),
             operating_margin=divide(operating, revenue),
             fcf_margin=divide(free_cash, revenue),
             cash_flow_quality=divide(fact("cfo", day), income),
-            earnings_yield=divide(income, market_cap),
+            earnings_yield=divide(income, market_cap)
+            if income is not None and income > 0
+            else None,
             fcf_yield=divide(free_cash, market_cap),
             price_to_sales=divide(market_cap, revenue),
+            trailing_pe=divide(market_cap, income) if income is not None and income > 0 else None,
+            gross_margin=(revenue - fact("cogs", day)) / revenue
+            if revenue and fact("cogs", day) is not None
+            else None,
+            ebitda_margin=divide(
+                (operating + fact("depreciation_amortization", day))
+                if operating is not None and fact("depreciation_amortization", day) is not None
+                else None,
+                revenue,
+            ),
+            roa=divide(
+                income,
+                (fact("total_assets", day, "instant") + fact("total_assets", annual[1], "instant"))
+                / 2,
+            )
+            if len(annual) > 1
+            and fact("total_assets", day, "instant") is not None
+            and fact("total_assets", annual[1], "instant") is not None
+            else None,
+            ev_to_ebit=divide(
+                market_cap
+                + verified_debt(day)
+                + (fact("preferred_equity", day, "instant") or 0)
+                + (fact("noncontrolling_interest", day, "instant") or 0)
+                - (fact("cash", day, "instant") or 0),
+                operating,
+            )
+            if market_cap is not None and verified_debt(day) is not None
+            else None,
+            ev_to_revenue=divide(
+                market_cap
+                + verified_debt(day)
+                + (fact("preferred_equity", day, "instant") or 0)
+                + (fact("noncontrolling_interest", day, "instant") or 0)
+                - (fact("cash", day, "instant") or 0),
+                revenue,
+            )
+            if market_cap is not None and verified_debt(day) is not None
+            else None,
+            price_to_fcf=divide(market_cap, free_cash)
+            if free_cash is not None and free_cash > 0
+            else None,
+            net_debt_to_ebitda=divide(
+                verified_debt(day) - fact("cash", day, "instant"),
+                operating + fact("depreciation_amortization", day),
+            )
+            if verified_debt(day) is not None
+            and fact("cash", day, "instant") is not None
+            and operating is not None
+            and fact("depreciation_amortization", day) is not None
+            else None,
+            debt_to_equity=divide(verified_debt(day), equity)
+            if verified_debt(day) is not None and equity is not None
+            else None,
+            cash_to_debt=divide(fact("cash", day, "instant"), verified_debt(day))
+            if verified_debt(day) is not None
+            else None,
+            current_ratio=divide(
+                fact("current_assets", day, "instant"), fact("current_liabilities", day, "instant")
+            ),
+            interest_coverage=divide(operating, fact("interest_expense", day)),
         )
         equity = parent_equity(day)
         values["price_to_book"] = divide(market_cap, equity)
