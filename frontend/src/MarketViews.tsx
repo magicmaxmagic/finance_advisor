@@ -6,6 +6,8 @@ export type Security = {
   ticker: string; name: string; sector: string | null; currency: string | null; price: number | null
   price_date: string | null; opportunity: number | null; fundamental: number | null; technical: number | null
   risk: number | null; pe: number | null; ev_ebitda: number | null; trend: number | null; momentum: number | null
+  industry: string | null; market_cap: number | null; roic: number | null; revenue_growth: number | null
+  ebitda_margin: number | null; leverage: number | null; fcf_yield: number | null; drawdown: number | null
   volatility: number | null; valuation: number | null; profitability: number | null
   strengths: Contributor[]; concerns: Contributor[]; contradictions: string[]; eligible: boolean
 }
@@ -13,17 +15,27 @@ export type Discovery = {
   as_of: string; model: string; epoch: string; captured_membership: boolean; rows: Security[]
   market: { benchmark: string; status: string; price_date?: string; price_return_12m?: number | null; regime?: string }
 }
-export function ScoreTiles({ row }: { row: Pick<Security, 'fundamental' | 'technical' | 'risk'> }) {
-  return <div className="score-tiles">{[
-    ['Fundamentals', row.fundamental], ['Technical momentum', row.technical], ['Risk resilience', row.risk],
-  ].map(([label, value]) => <div className="score-tile" key={String(label)}>
-    <span>{label}</span><strong>{scoreText(typeof value === 'number' ? value : null)}</strong>
-    {typeof value === 'number' && <progress value={value} max="100" aria-label={String(label)} />}
-  </div>)}</div>
+export function ScoreTiles({ row, breakdown }: {
+  row: Pick<Security, 'fundamental' | 'technical' | 'risk'>
+  breakdown?: Record<string,Record<string,{score:number|null; coverage:number}>>
+}) {
+  return <div className="score-tiles">{([
+    ['fundamental','Fundamentals',row.fundamental], ['technical','Technical momentum',row.technical], ['risk','Risk resilience',row.risk],
+  ] as const).map(([key,label,value]) => {
+    const groups = Object.entries(breakdown?.[key] ?? {})
+    const best = groups.filter(([,group]) => group.score != null).sort(([,a],[,b]) => b.score! - a.score!)[0]
+    const coverage = groups.length ? groups.reduce((total,[,group]) => total+group.coverage,0)/groups.length : null
+    return <div className="score-tile" key={key}>
+      <span>{label}</span><strong>{scoreText(value)}</strong>
+      <small>{classification(value)}</small>
+      {value != null && <progress value={value} max="100" aria-label={label}/>}
+      {coverage != null && <small>{pct(coverage)} evidence coverage{best ? ` · Highest group: ${metricName(best[0])}` : ''}</small>}
+    </div>
+  })}</div>
 }
 
 export function Overview({ data, published, pipeline, openCompany, navigate, previous, study }: {
-  data: Discovery; previous?: Discovery; study?: { version?: string; model_version?: string; end?: string }; published?: string; pipeline?: string; openCompany: (ticker: string) => void
+  data: Discovery; previous?: Discovery; study?: { version?: string; model_version?: string; end?: string; headline?: { label: string } }; published?: string; pipeline?: string; openCompany: (ticker: string) => void
   navigate: (page: 'Discover' | 'Model Validation' | 'Data Center') => void
 }) {
   const opportunities = data.rows.filter(row => row.opportunity != null).sort((a,b) => b.opportunity! - a.opportunity!).slice(0, 3)
@@ -69,7 +81,7 @@ export function Overview({ data, published, pipeline, openCompany, navigate, pre
       </section>
       <section className="panel"><h2>Research activity</h2><p>Published {published ? new Date(published).toLocaleString('en-US') : 'date unavailable'}.</p>
         <p>{study?.end ? `Latest validation archive covers outcomes through ${study.end}.` : 'Validation archive date unavailable.'}</p>
-        <p>Predictive evidence inconclusive.</p><button type="button" onClick={() => navigate('Model Validation')}>Review validation evidence</button> <button type="button" onClick={() => navigate('Data Center')}>View publication</button></section>
+        <p>{study?.headline?.label ?? 'Validation evidence status unavailable.'}</p><button type="button" onClick={() => navigate('Model Validation')}>Review validation evidence</button> <button type="button" onClick={() => navigate('Data Center')}>View publication</button></section>
     </div>
   </>
 }
@@ -86,14 +98,39 @@ const columns = {
   trend: ['Price vs. SMA200', (r: Security) => pct(r.trend)],
   momentum: ['3M momentum', (r: Security) => pct(r.momentum)],
   volatility: ['Volatility', (r: Security) => pct(r.volatility)],
+  roic: ['ROIC', (r: Security) => pct(r.roic)],
+  fcf_yield: ['FCF yield', (r: Security) => pct(r.fcf_yield)],
+  revenue_growth: ['Revenue growth', (r: Security) => pct(r.revenue_growth)],
+  market_cap: ['Reported-share market value', (r: Security) => cash(r.market_cap,r.currency)],
 } as const
 type Column = keyof typeof columns
 
-export function Screener({ data, saved, openCompany }: { data: Discovery; saved?: string[]; openCompany: (ticker: string) => void }) {
+const presets = {
+  all: ['All companies', 'Shows the configured research universe.'],
+  fundamentals: ['Strong fundamentals', 'Fundamental score of at least 65.'],
+  valuation: ['Attractive valuation', 'Positive earnings yield in the top quarter of this research universe. Peer and business-model differences matter.'],
+  momentum: ['Positive momentum', 'Positive three-month return and a close above SMA200.'],
+  trap: ['Potential value traps', 'Top-quarter positive earnings yield with negative revenue growth or below-midpoint fundamentals.'],
+  improving: ['Improving scores', 'Opportunity score up by at least 5 points from a comparable prior-week cutoff.'],
+  lowerRisk: ['Lower market risk', 'Annualized volatility in the lowest quarter of this research universe.'],
+} as const
+type Preset = keyof typeof presets
+const threshold = (values: (number | null)[], quantile: number) => {
+  const sorted = values.filter((value): value is number => value != null && Number.isFinite(value)).sort((a,b) => a-b)
+  return sorted.length >= 8 ? sorted[Math.floor((sorted.length-1) * quantile)] : null
+}
+
+export function Screener({ data, saved, openCompany, compare = [], toggleCompare, openCompare, prior }: {
+  data: Discovery; saved?: string[]; openCompany: (ticker: string) => void
+  compare?: string[]; toggleCompare?: (ticker: string) => void; openCompare?: () => void; prior?: Discovery
+}) {
   const [query, setQuery] = useState('')
   const [sector, setSector] = useState('')
+  const [industry, setIndustry] = useState('')
+  const [preset, setPreset] = useState<Preset>('all')
   const [model, setModel] = useState<'v2' | 'legacy'>('v2')
-  const [filters, setFilters] = useState({ min: '', pe: '', momentum: '', volatility: '', roa: '' })
+  const emptyFilters = { min: '', pe: '', ev: '', momentum: '', volatility: '', roa: '', roic: '', growth: '', sma: '', size: '' }
+  const [filters, setFilters] = useState(emptyFilters)
   const [visible, setVisible] = useState<Column[]>(['sector', 'price', 'opportunity', 'fundamental', 'technical', 'risk'])
   const [sort, setSort] = useState<{ key: Column | 'name'; descending: boolean }>({ key: 'opportunity', descending: true })
   const [compact, setCompact] = useState(false)
@@ -111,13 +148,36 @@ export function Screener({ data, saved, openCompany }: { data: Discovery; saved?
       } catch (error) { setLegacyError(String(error)) }
     }
   }
+  const eligible = data.rows.filter(row => row.eligible)
+  const expensive = threshold(eligible.map(row => row.valuation),.75)
+  const lowVol = threshold(eligible.map(row => row.volatility),.25)
+  const previous = prior?.epoch === data.epoch && prior.model === data.model
+    && prior.captured_membership === data.captured_membership
+    ? new Map(prior.rows.map(row => [row.ticker,row.opportunity])) : undefined
+  function matchesPreset(row: Security) {
+    if (preset === 'all') return true
+    if (!row.eligible) return false
+    const highYield = expensive != null && row.valuation != null && row.valuation > 0 && row.valuation >= expensive
+    if (preset === 'fundamentals') return (row.fundamental ?? -1) >= 65
+    if (preset === 'valuation') return highYield
+    if (preset === 'trap') return highYield && ((row.revenue_growth ?? 0) < 0 || (row.fundamental ?? 50) < 50)
+    if (preset === 'momentum') return (row.momentum ?? 0) > 0 && (row.trend ?? 0) > 0
+    if (preset === 'lowerRisk') return lowVol != null && row.volatility != null && row.volatility <= lowVol
+    const old = previous?.get(row.ticker)
+    return model === 'v2' && row.opportunity != null && old != null && row.opportunity-old >= 5
+  }
   const rows = data.rows.map(row => model === 'legacy' ? { ...row, opportunity: legacy?.[row.ticker] ?? null } : row)
-    .filter(row => (!saved || saved.includes(row.ticker)) && (!sector || row.sector === sector)
+    .filter(row => (!saved || saved.includes(row.ticker)) && (!sector || row.sector === sector) && (!industry || row.industry === industry) && matchesPreset(row)
       && `${row.name} ${row.ticker}`.toLowerCase().includes(query.toLowerCase())
       && (!filters.min || row.opportunity != null && row.opportunity >= Number(filters.min))
       && (!filters.pe || row.pe != null && row.pe <= Number(filters.pe))
       && (!filters.momentum || row.momentum != null && row.momentum * 100 >= Number(filters.momentum))
       && (!filters.volatility || row.volatility != null && row.volatility * 100 <= Number(filters.volatility))
+      && (!filters.ev || row.ev_ebitda != null && row.ev_ebitda <= Number(filters.ev))
+      && (!filters.roic || row.roic != null && row.roic * 100 >= Number(filters.roic))
+      && (!filters.growth || row.revenue_growth != null && row.revenue_growth * 100 >= Number(filters.growth))
+      && (!filters.sma || row.trend != null && row.trend * 100 >= Number(filters.sma))
+      && (!filters.size || row.market_cap != null && row.market_cap >= Number(filters.size)*1e9)
       && (!filters.roa || row.profitability != null && row.profitability * 100 >= Number(filters.roa)))
     .sort((a,b) => {
       const left = a[sort.key], right = b[sort.key]
@@ -125,6 +185,7 @@ export function Screener({ data, saved, openCompany }: { data: Discovery; saved?
       if (right == null) return -1
       return (typeof left === 'number' && typeof right === 'number' ? left - right : String(left).localeCompare(String(right))) * (sort.descending ? -1 : 1)
     })
+  const industries = [...new Set(data.rows.flatMap(row => row.industry ?? []))].sort()
   const sectors = [...new Set(data.rows.flatMap(row => row.sector ?? []))].sort()
   const lastPage = Math.max(0, Math.ceil(rows.length / 15) - 1)
   const current = Math.min(page, lastPage)
@@ -132,6 +193,12 @@ export function Screener({ data, saved, openCompany }: { data: Discovery; saved?
     <button type="button" onClick={() => setSort({ key, descending: sort.key !== key ? key !== 'name' && key !== 'sector' : !sort.descending })}>{name}{sort.key === key && (sort.descending ? ' ↓' : ' ↑')}</button>
   </th>
   return <section className="panel screener">
+    <div className="section-heading"><div><h2>Find a research candidate</h2><p>Presets describe available evidence and do not represent validated strategies.</p></div>
+      {openCompare && <button className="primary" type="button" disabled={compare.length < 2} onClick={openCompare}>Compare selected · {compare.length}/4</button>}</div>
+    <div className="topic-nav" aria-label="Discovery presets">{(Object.keys(presets) as Preset[]).map(key => <button type="button"
+      key={key} aria-pressed={preset === key} onClick={() => { setPreset(key); setPage(0); if (key === 'improving') void selectModel('v2') }}>
+      {presets[key][0]}</button>)}</div>
+    <p className="preset-rule">{presets[preset][1]} {preset === 'improving' && !previous && 'Comparable previous scores are unavailable.'}</p>
     <div className="toolbar">
       <label>Find a company<input type="search" placeholder="Name or ticker" value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} /></label>
       <label>Sector<select value={sector} onChange={event => { setSector(event.target.value); setPage(0) }}><option value="">All sectors</option>{sectors.map(v => <option key={v}>{v}</option>)}</select></label>
@@ -140,18 +207,25 @@ export function Screener({ data, saved, openCompany }: { data: Discovery; saved?
     </div>
     <div className="screener-options">
       <details><summary>Advanced filters</summary><div className="toolbar">
-        {([['min', 'Minimum score'], ['pe', 'Maximum P/E'], ['momentum', 'Min. momentum (%)'], ['volatility', 'Max. volatility (%)'], ['roa', 'Min. return on assets (%)']] as const).map(([key, label]) => <label key={key}>{label}<input type="number" value={filters[key]} onChange={event => { setFilters({ ...filters, [key]: event.target.value }); setPage(0) }} /></label>)}
-        <button type="button" onClick={() => { setFilters({ min: '', pe: '', momentum: '', volatility: '', roa: '' }); setPage(0) }}>Reset filters</button>
+        <label>Industry<select value={industry} onChange={event => { setIndustry(event.target.value); setPage(0) }}>
+          <option value="">All industries</option>{industries.map(v => <option key={v}>{v}</option>)}</select></label>
+        {([['min', 'Minimum score'], ['pe', 'Maximum P/E'], ['ev', 'Maximum EV / EBITDA'], ['momentum', 'Min. momentum (%)'], ['volatility', 'Max. volatility (%)'], ['roa', 'Min. return on assets (%)'], ['roic', 'Min. ROIC (%)'], ['growth', 'Min. revenue growth (%)'], ['sma', 'Min. distance to SMA200 (%)'], ['size', 'Min. market value (USD billions)']] as const).map(([key, label]) => <label key={key}>{label}<input type="number" value={filters[key]} onChange={event => { setFilters({ ...filters, [key]: event.target.value }); setPage(0) }} /></label>)}
+        <button type="button" onClick={() => { setFilters(emptyFilters); setSector(''); setIndustry(''); setQuery(''); setPreset('all'); setPage(0) }}>Reset filters</button>
       </div></details>
       <details><summary>Columns</summary><div className="toolbar">{(Object.keys(columns) as Column[]).map(key =>
         <label className="check-label" key={key}><input type="checkbox" checked={visible.includes(key)} onChange={() => setVisible(current => current.includes(key) ? current.filter(v => v !== key) : [...current, key])} />{columns[key][0]}</label>)}</div></details>
     </div>
     {model === 'legacy' && !legacy && <p role="status">{legacyError || 'Loading legacy ranks…'}</p>}
     <div className={`table-wrap ${compact ? 'compact' : ''}`} tabIndex={0} aria-label="Company results">
-      <table><thead><tr>{header('name', 'Company')}{visible.map(key => header(key, key === 'opportunity' && model === 'legacy' ? 'Legacy score' : columns[key][0]))}</tr></thead>
+      <table><thead><tr>{header('name', 'Company')}<th scope="col">Evidence</th>{visible.map(key => header(key, key === 'opportunity' && model === 'legacy' ? 'Legacy score' : columns[key][0]))}{toggleCompare && <th scope="col">Compare</th>}</tr></thead>
       <tbody>{rows.slice(current * 15, (current + 1) * 15).map(row => <tr key={row.ticker}>
         <th scope="row"><button type="button" className="company-link" onClick={() => openCompany(row.ticker)}><span className="ticker-mark">{row.ticker.slice(0, 2)}</span><span><strong>{row.ticker}</strong><small>{row.name}</small></span></button></th>
+        <td className="screener-evidence"><span>{row.strengths[0] ? `Strength · ${metricName(row.strengths[0].metric)}` : 'Strength unavailable'}</span>
+          <small>{row.concerns[0] ? `Concern · ${metricName(row.concerns[0].metric)}` : 'No below-midpoint contributor'}</small></td>
         {visible.map(key => <td key={key} className={key === 'opportunity' ? 'emphasis' : ''}>{columns[key][1](row)}</td>)}
+        {toggleCompare && <td><button type="button" aria-pressed={compare.includes(row.ticker)} disabled={compare.length >= 4 && !compare.includes(row.ticker)}
+          aria-label={`${compare.includes(row.ticker) ? 'Remove' : 'Add'} ${row.ticker} ${compare.includes(row.ticker) ? 'from' : 'to'} comparison`}
+          onClick={() => toggleCompare(row.ticker)}>{compare.includes(row.ticker) ? 'Added' : 'Add'}</button></td>}
       </tr>)}</tbody></table>
     </div>
     {!rows.length && <p className="empty">{saved && !saved.length ? 'Save a company from its research page to start your watchlist.' : 'No companies match these filters.'}</p>}

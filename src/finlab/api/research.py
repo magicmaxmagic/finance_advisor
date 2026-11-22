@@ -11,20 +11,37 @@ router = APIRouter(prefix="/api")
 
 @router.get("/analytics/model-validation")
 def model_validation():
-    """Read the most recent archived study without running a simulation."""
-    import json
-
+    """Read the latest archived study without running a simulation."""
+    from finlab.analytics.validation_view import read_validation, summarize_validation
     from finlab.config import get_settings
 
-    directory = get_settings().reports_dir / "research"
-    for filename in ("validation-v3-latest.json", "score-validation-v2-2020-2022-monthly.json"):
-        path = directory / filename
-        if path.is_file():
-            report = json.loads(path.read_text())
-            return {
-                key: value for key, value in report.items() if key not in {"folds", "universe_ids"}
-            }
-    return {"reason": "No historical validation report has been archived."}
+    report = read_validation(get_settings().reports_dir / "research")
+    if report is None:
+        return {"reason": "No historical validation report has been archived."}
+    return summarize_validation(report)
+
+
+@router.get("/analytics/model-validation/series")
+def model_validation_series(
+    horizon: Literal["21", "63", "126", "252"] = "21", series: str = "opportunity"
+):
+    """Return the archived time series for one factor or model."""
+    from finlab.analytics.validation_view import read_validation, validation_series
+    from finlab.config import get_settings
+
+    report = read_validation(get_settings().reports_dir / "research")
+    if report is None:
+        return {
+            "reason": "No historical validation report has been archived.",
+            "windows": [],
+            "portfolio": [],
+        }
+    summary = report.get("summary", {}).get(str(horizon), {})
+    if series not in (summary.get("models", {}) | summary.get("factors", {})):
+        raise HTTPException(
+            status_code=404, detail="This series is not in the active research archive."
+        )
+    return validation_series(report, int(horizon), series)
 
 
 class StrategyRequest(BaseModel):

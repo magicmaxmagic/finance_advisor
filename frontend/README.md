@@ -1,6 +1,6 @@
 # FinLab Analytics frontend
 
-React, TypeScript and Vite serve the local research workspace. Research, personal
+React, TypeScript, Vite and Lightweight Charts serve the local research workspace. Research, personal
 tools, and Data Engine operations share a shell and have distinct navigation groups.
 The visual system uses charcoal surfaces, restrained gold emphasis, and labeled
 semantic colors for evidence and concerns.
@@ -30,7 +30,7 @@ supports offline Analytics.
 | `src/App.tsx` | Hash navigation, browser history, global company search, historical cutoff, watchlist persistence, request states, company hero and Data Center publication summary. |
 | `src/MarketViews.tsx` | Overview snapshot and opportunity cards, compact multidimensional screener, filters, custom columns, sorting and paging. |
 | `src/CompanyAssessment.tsx` | Expandable score evidence, grouped indicators, Simple/Quant modes, and filing detail. |
-| `src/FinancialChart.tsx` | Canvas chart with session ranges, moving averages, volume, optional benchmark, cursor and keyboard-operable session slider. |
+| `src/FinancialChart.tsx` | Lazy financial chart with session ranges, crosshair, moving averages, volume, benchmark and keyboard session inspection. |
 | `src/ModelValidation.tsx` | Archived V2/V3 evidence, horizons, model and factor results, uncertainty, quintiles and limitations. |
 | `src/ResearchTools.tsx` | Strategy and benchmark views, portfolio CSV and scenario workflow, ingestion status and queued refresh. |
 | `src/format.ts` | Shared financial values, labels and research classification formatting. |
@@ -55,11 +55,17 @@ flowchart TD
 ```sh
 npm --prefix frontend run build
 npm --prefix frontend run lint
-node --experimental-websocket frontend/scripts/browser-check.mjs \
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
-  http://127.0.0.1:5173
 ```
 
-The browser script uses a disposable Chrome profile and writes screenshots under
-`data/reports/ui/`. See [UX audit](../docs/ui_ux_audit.md) for baseline findings
-and [V3 validation](../docs/validation_v3.md) for the research protocol.
+The earlier browser script records the V3 baseline. Run the V4 Playwright
+journeys against a published warehouse and running local app:
+
+```sh
+FINLAB_E2E_URL=http://127.0.0.1:5173 npm --prefix frontend run test:e2e
+```
+
+Playwright uses the installed Chrome channel and stores evidence under
+`data/reports/ui-v4/`. An alternate binary can be passed as
+`FINLAB_CHROME_PATH`. See [V4 product documentation](../docs/product_v4.md)
+and [V4 UX audit](../docs/ux_v4_audit.md). The Playwright suite expects the
+historical AAPL fixture available in the local publication and the archived V3 report.

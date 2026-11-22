@@ -13,9 +13,9 @@ def discovery(as_of=None):
     epoch, cohort, captured = assessment_cohort(cutoff)
     with published_read_conn(epoch=epoch) as con:
         metadata = {
-            sid: (name, currency)
-            for sid, name, currency in con.execute(
-                "SELECT s.security_id,e.name,s.currency FROM security s JOIN entity e USING(cik)"
+            sid: (name, currency, industry)
+            for sid, name, currency, industry in con.execute(
+                "SELECT s.security_id,e.name,s.currency,e.industry FROM security s JOIN entity e USING(cik)"
             ).fetchall()
         }
     rows = []
@@ -23,12 +23,14 @@ def discovery(as_of=None):
         evidence = assess(row, cohort, cfg.assessment_weights)
         raw = values(row)
         sid = row["security_id"]
-        name, currency = metadata.get(sid, (row["ticker"], None))
+        name, currency, industry = metadata.get(sid, (row["ticker"], None, None))
         rows.append(
             dict(
                 ticker=row["ticker"],
                 name=name,
                 sector=row["sector"],
+                industry=industry,
+                market_cap=row["reported_share_market_cap"],
                 currency=currency,
                 price=row["latest_price"],
                 price_date=row["source_date"],
@@ -43,6 +45,12 @@ def discovery(as_of=None):
                 volatility=raw.get("annualized_volatility"),
                 valuation=raw.get("earnings_yield"),
                 profitability=raw.get("roa"),
+                roic=raw.get("roic"),
+                revenue_growth=raw.get("revenue_growth"),
+                ebitda_margin=raw.get("ebitda_margin"),
+                leverage=raw.get("debt_to_assets"),
+                fcf_yield=raw.get("fcf_yield"),
+                drawdown=raw.get("max_drawdown"),
                 strengths=evidence["positive_contributors"][:1],
                 concerns=evidence["negative_contributors"][:1],
                 contradictions=evidence["contradictions"],

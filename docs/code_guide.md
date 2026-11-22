@@ -82,7 +82,8 @@ With Analytics running, interactive schemas are available at
 | `GET /api/warehouse/history/{security_id}` | Up to 10,000 closes and volume observations plus benchmark data through required `as_of`. |
 | `GET /api/analytics/discovery`, `GET /api/analytics/factors/{identity}` | V2 cohort summaries and detailed company assessment. Optional `as_of`. |
 | `GET /api/analytics/rankings`, `GET /api/analytics/recommendations` | Separate legacy ranking and research evidence. Optional `as_of`. |
-| `GET /api/analytics/model-validation` | Archived summary, preferring V3. Useful before opening the larger local report. |
+| `GET /api/analytics/model-validation` | Archived summary and dynamic evidence interpretation, preferring V3. |
+| `GET /api/analytics/model-validation/series` | Archived IC windows and aligned strategy and SPY curves for one horizon and series. |
 | `POST /api/analytics/backtest`, `POST /api/portfolio/analyze` | Historical strategy and portfolio valuation against local data. |
 | `GET /api/data/status`, `POST /api/data/refresh` | Engine status and queued synchronization request. |
 | `GET /api/market/live` | Compatibility endpoint. Explicit demo output is available. The Analytics service does not fetch live quotes. |

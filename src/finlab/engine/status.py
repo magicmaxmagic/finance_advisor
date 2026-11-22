@@ -33,7 +33,25 @@ def write_status(settings_dir: Path, status: IngestionStatus) -> Path:
     target = settings_dir / "status.json"
     settings_dir.mkdir(parents=True, exist_ok=True)
     temporary = settings_dir / ".status.tmp"
-    temporary.write_text(json.dumps(asdict(status), indent=2, sort_keys=True) + "\n")
+    payload = asdict(status)
+    try:
+        previous = json.loads(target.read_text())
+        history = previous.get("recent_jobs", [])
+        if not isinstance(history, list):
+            history = []
+    except (FileNotFoundError, json.JSONDecodeError, AttributeError):
+        history = []
+    completed = [asdict(step) for step in status.steps if step.finished_at is not None]
+    seen = {
+        (row.get("name"), row.get("started_at"), row.get("state"))
+        for row in history
+        if isinstance(row, dict)
+    }
+    history.extend(
+        row for row in completed if (row["name"], row["started_at"], row["state"]) not in seen
+    )
+    payload["recent_jobs"] = history[-50:]
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     temporary.replace(target)
     return target
 

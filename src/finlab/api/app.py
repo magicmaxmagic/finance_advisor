@@ -55,6 +55,24 @@ def warehouse_status() -> dict:
         publication = con.execute(
             "SELECT epoch,published_at FROM _warehouse_publication"
         ).fetchone()
+        from finlab.ingest.calendar import last_completed_session
+
+        expected = last_completed_session(datetime.now(UTC))
+        price_range = (
+            list(con.execute("SELECT min(date), max(date) FROM price_daily").fetchone())
+            if "price_daily" in attached
+            else [None, None]
+        )
+        price_sources = (
+            [
+                source
+                for (source,) in con.execute(
+                    "SELECT DISTINCT source FROM price_daily WHERE source IS NOT NULL ORDER BY source"
+                ).fetchall()
+            ]
+            if "price_daily" in attached
+            else []
+        )
         return {
             "warehouse_epoch": publication[0],
             "published_at": publication[1],
@@ -71,11 +89,10 @@ def warehouse_status() -> dict:
                 if "fact" in attached
                 else [None, None]
             ),
-            "price_range": (
-                list(con.execute("SELECT min(date), max(date) FROM price_daily").fetchone())
-                if "price_daily" in attached
-                else [None, None]
-            ),
+            "price_range": price_range,
+            "price_sources": price_sources,
+            "last_expected_session": expected,
+            "price_current_through_expected": bool(price_range[1] and price_range[1] >= expected),
         }
 
 
@@ -98,13 +115,13 @@ def warehouse_asset(ticker: str, as_of: date | None = None) -> dict:
                 "reason": "Warehouse identity data unavailable",
             }
         identity = con.execute(
-            "SELECT e.cik, e.name, e.sector, s.security_id, s.currency, s.exchange "
+            "SELECT e.cik, e.name, e.sector, s.security_id, s.currency, s.exchange, e.industry "
             "FROM entity e JOIN security s ON s.cik = e.cik WHERE s.ticker = ? LIMIT 1",
             [ticker],
         ).fetchone()
         if identity is None:
             return {"ticker": ticker, "available": False, "reason": "Ticker absent from warehouse"}
-        cik, name, sector, security_id, currency, exchange = identity
+        cik, name, sector, security_id, currency, exchange, industry = identity
 
         latest_filing = con.execute(
             "SELECT accession_number, form, filed_date, period_of_report, fiscal_year, fiscal_period, primary_doc_url "
@@ -135,6 +152,7 @@ def warehouse_asset(ticker: str, as_of: date | None = None) -> dict:
                 "sector": sector,
                 "currency": currency,
                 "exchange": exchange,
+                "industry": industry,
                 "security_id": security_id,
             },
             "latest_filing": None

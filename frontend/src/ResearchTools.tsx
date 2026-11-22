@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FinancialChart } from './FinancialChart'
+import { FinancialChart } from './DeferredChart'
 import { cash, pct } from './format'
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -70,7 +70,7 @@ export function StrategyLab() {
         <button type="button" aria-pressed={view === 'drawdown'} onClick={() => setView('drawdown')}>Drawdown</button></div>
       <FinancialChart points={chartSeries(result.equity)} benchmark={chartSeries(result.benchmark_equity)}
         label={view === 'equity' ? 'Equity indexed to 100' : 'Drawdown (%)'} comparisonRebased={false}
-        initialOverlays={['SPY']} initialRange="MAX" showPriceTools={false} />
+        initialOverlays={['SPY']} initialRange="MAX" showPriceTools={false} units={view === 'drawdown' ? '%' : undefined} />
       <details className="panel"><summary>Assumptions and all results</summary>
         <ul>{result.caveats.map(text => <li key={text}>{text}</li>)}</ul>
         <pre>{JSON.stringify(result.metrics, null, 2)}</pre>
@@ -137,10 +137,11 @@ export function PortfolioPanel() {
   </>
 }
 
-type EngineState = { updated_at: string | null; pipeline_state: string; steps: { name: string; state: string; detail: string }[] }
+type Job = { name:string; state:string; detail:string; finished_at?:string|null; started_at?:string|null }
+type EngineState = { updated_at:string|null; pipeline_state:string; steps:Job[]; recent_jobs?:Job[] }
 type QualityState = { scope: string; rows: { ticker: string; status: string; missing_sessions?: string[] }[] }
 
-export function DataCenterControls() {
+export function DataCenterControls({ publication }: { publication?: string }) {
   const [status, setStatus] = useState<EngineState | null>(null)
   const [quality, setQuality] = useState<QualityState | null>(null)
   const [message, setMessage] = useState('')
@@ -170,14 +171,32 @@ export function DataCenterControls() {
     catch (reason) { setMessage(String(reason)) }
     finally { setBusy(false) }
   }
-  return <section className="panel"><h2>Ingestion and quality</h2>
-    <p>{status ? `${status.pipeline_state.replaceAll('_', ' ')} · ${status.updated_at ? new Date(status.updated_at).toLocaleString('en-US') : 'No status timestamp'}` : 'Loading Data Engine status…'}</p>
+  const state = status?.pipeline_state
+  const needsAttention = state === 'failed' || state === 'deadletter'
+  const statusText = !state ? 'Status unavailable' : state === 'not_started' ? 'No sync status yet'
+    : needsAttention ? 'Needs attention' : state === 'running' ? 'Working' : state === 'done' ? 'Completed' : state.replaceAll('_',' ')
+  const jobs = status?.recent_jobs ?? []
+  const successful = [...jobs,...(status?.steps ?? [])].filter(step => step.state === 'done' && ['prices','price_corrections'].includes(step.name))
+    .map(step=>step.finished_at).filter(Boolean).sort().at(-1)
+  return <section className="panel"><h2>Synchronization health</h2>
+    <div className="v4-context"><strong className={needsAttention ? 'warning' : ''}>{statusText}</strong>
+      <p>{successful ? `Last successful price synchronization ${new Date(successful).toLocaleString('en-US')}.`
+        : publication ? `Latest successful warehouse publication ${new Date(publication).toLocaleString('en-US')}.` : 'No successful job timestamp is available.'}</p>
+      {needsAttention && <p>Open job details to see what prevented the most recent update. The last validated publication remains available.</p>}
+    </div>
+    <p>{status ? `Status checked ${status.updated_at ? new Date(status.updated_at).toLocaleString('en-US') : 'No status timestamp'}` : 'Loading Data Engine status…'}</p>
     <div className="toolbar"><button type="button" disabled={busy} onClick={inspect}>Inspect coverage</button>
       <button type="button" className="primary" disabled={busy || confirm} onClick={() => setConfirm(true)}>Request synchronization</button></div>
     {confirm && <div role="group" aria-label="Confirm synchronization"><p>Queue a synchronization for the local Data Engine?</p>
       <button type="button" onClick={refresh}>Confirm request</button> <button type="button" onClick={() => setConfirm(false)}>Cancel</button></div>}
     {message && <p role="status">{message}</p>}
     {status?.steps.length ? <details><summary>Ingestion job details</summary><ul>{status.steps.map(step => <li key={step.name}>{step.name} · {step.state} · {step.detail}</li>)}</ul></details> : null}
+    <details><summary>Recent job history</summary>
+      {jobs.length ? <div className="table-wrap"><table><thead><tr><th>Job</th><th>Completed</th><th>State</th><th>Details</th></tr></thead>
+        <tbody>{[...jobs].reverse().map((job,index) => <tr key={`${job.started_at}-${job.name}-${index}`}><th scope="row">{job.name.replaceAll('_',' ')}</th>
+          <td>{job.finished_at ? new Date(job.finished_at).toLocaleString('en-US') : '—'}</td><td>{job.state}</td><td className="screener-evidence">{job.detail}</td></tr>)}</tbody>
+      </table></div> : <p>Job history appears as the current Data Engine publishes completed attempts.</p>}
+    </details>
     {quality && <details open><summary>Security coverage</summary><p>{quality.scope}</p>
       <div className="table-wrap"><table><thead><tr><th>Ticker</th><th>State</th><th>Missing sessions</th></tr></thead>
         <tbody>{quality.rows.map(row => <tr key={row.ticker}><th scope="row">{row.ticker}</th><td>{row.status}</td><td>{row.missing_sessions?.length ?? '—'}</td></tr>)}</tbody>

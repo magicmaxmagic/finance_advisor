@@ -7,7 +7,7 @@ deterministic research through FastAPI and React. The reporting and backtest led
 live outside the financial database.
 
 [Source code guide](code_guide.md) · [Scoring V2](scoring_v2.md) ·
-[Research methodology and results](validation_v3.md) · [Frontend architecture](../frontend/README.md)
+[Research methodology and results](validation_v3.md) · [Frontend architecture](../frontend/README.md) · [V4 product guide](product_v4.md)
 
 ## Running system
 
@@ -59,7 +59,7 @@ flowchart LR
 | Financial storage | The writer maintains native metadata and emits working Parquet. Facts and daily prices are accessed through explicit per-dataset Parquet views. |
 | Publication | A unique epoch contains immutable files. The publisher copies mutable inputs into a content-addressed object store and links epoch files to the immutable objects. A completed epoch and checksums precede the atomic update of `snapshots/latest.json`. |
 | Analytics | Pinned publication checks, canonical point-in-time facts, V2 company scores, separate legacy ranking and recommendation archives, portfolio analysis, strategies and V3 validation. |
-| Presentation | Vite proxies `/api` to FastAPI. The shell groups research, personal tools and operations. The refresh route writes a request to the control inbox for the engine. |
+| Presentation | Vite proxies `/api` to FastAPI. The shell groups research, personal tools and operations. The refresh route writes a request to the control inbox for the engine. Portfolio trades are kept in browser-owned storage and are passed to Analytics only for validation or calculation. |
 | Optional and historical code | The deterministic application runs without an LLM. The older text, valuation and report design below includes placeholders and longer-term ideas. The source guide marks these explicitly. |
 
 ## Read and publication lifecycle

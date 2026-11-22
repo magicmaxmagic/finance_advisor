@@ -64,8 +64,10 @@ make prices-yahoo START=1996-01-01 END=2026-11-21
 
 Start in Overview for the benchmark, publication status and research candidates.
 Discover supports a sortable V2 screener and a separate legacy ranking. Company
-Research shows price history, score evidence and filing details. Model Validation,
-Strategies, Portfolio, Watchlist, and Data Center have separate destinations.
+Research shows price history, score evidence and filing details. Compare keeps up
+to four companies at the same cutoff. The guided Portfolio ledger supports buy
+and sell entry and optional CSV import. Model Validation, Strategies, Watchlist and
+Data Center have separate destinations.
 
 The opportunity score summarizes relative evidence. The historical research
 reports disclose uncertainty, coverage and survivorship bias.
@@ -75,7 +77,8 @@ reports disclose uncertainty, coverage and survivorship bias.
 - [Scoring V2 formulas and results](docs/scoring_v2.md)
 - [V3 validation methodology and results](docs/validation_v3.md)
 - [Frontend design, run commands and verification](frontend/README.md)
-- [UX audit](docs/ui_ux_audit.md)
+- [V4 product guide and evidence policy](docs/product_v4.md)
+- [V4 UX audit](docs/ux_v4_audit.md)
 
 ## Architecture invariants
 
