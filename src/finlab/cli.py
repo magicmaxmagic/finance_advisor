@@ -467,13 +467,20 @@ def weekly(
     week = completed_friday(datetime.now(UTC))
     path = cfg.reports_dir / "weekly" / f"{week}.zip"
     try:
-        if not path.is_file():
-            with write_conn(cfg):
-                path = generate(cfg, prices=prices_csv)
+        if prices_csv is None or not path.is_file():
+            path = generate(cfg, prices=prices_csv)
     except (WriterLockHeld, ValueError, RuntimeError, httpx.HTTPError) as exc:
         raise _fail(str(exc)) from exc
     brief = read_brief(path)
     console.print(f"Week ending {brief['week']} · {brief['source']}")
+    if brief["source"] == "Validated local warehouse":
+        for row in brief["rows"][:10]:
+            score = f"{row['score']:.1f}" if row["score"] is not None else "unavailable"
+            console.print(
+                f"{row['ticker']} · score {score} · {row['status']} · price date {row['price_date']}"
+            )
+        console.print(f"Evidence and limitations: {path}")
+        return
     picks = [r for r in brief["rows"] if r["status"] == "Buy candidate"]
     if not picks:
         console.print("No buy candidate this week.")

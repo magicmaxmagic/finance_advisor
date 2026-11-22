@@ -25,6 +25,7 @@ EXPECTED_TABLES = frozenset(
         "filing",
         "fact",
         "price_daily",
+        "price_ingestion",
         "corporate_action",
         # L2 canonical
         "concept_map",

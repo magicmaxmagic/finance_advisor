@@ -22,7 +22,9 @@ import asyncio
 import gzip
 import hashlib
 import json
+import math
 import resource
+import sys
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -33,6 +35,7 @@ import duckdb
 import polars as pl
 
 from finlab.config import Settings, get_settings
+from finlab.db.conn import parquet_files
 from finlab.db.keys import fact_key_sql
 from finlab.ingest.prices import build_securities
 from finlab.ingest.sec import SecClient, companyfacts_url
@@ -79,7 +82,7 @@ _FACT_SCHEMA: dict[str, Any] = {
 
 # A parser bug that silently changed values would be invisible in aggregate, so
 # conflicting duplicates are counted and the run fails past this fraction.
-CONFLICT_TOLERANCE = 0.001
+CONFLICT_TOLERANCE = 0.0
 
 CHUNK_ROWS = 50_000
 
@@ -157,6 +160,14 @@ def parse_companyfacts(
                         counters.skipped_null_value += 1
                         continue
 
+                    try:
+                        numeric = float(value)
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        raise IngestError(
+                            f"Invalid numeric SEC observation for {cik}/{tag}"
+                        ) from exc
+                    if isinstance(value, bool) or not math.isfinite(numeric):
+                        raise IngestError(f"Invalid numeric SEC observation for {cik}/{tag}")
                     period_end = _as_date(obs.get("end"))
                     filed_date = _as_date(obs.get("filed"))
                     if period_end is None or filed_date is None:
@@ -176,7 +187,7 @@ def parse_companyfacts(
                         period_end,
                         days,
                         duration_bucket(days),
-                        float(value),
+                        numeric,
                         accession,
                         obs.get("form"),
                         obs.get("fy"),
@@ -238,6 +249,31 @@ class FetchReport:
     missing: list[int] = field(default_factory=list)
 
 
+def _archive_cached_response(settings: Settings, company: Company, manifest: dict) -> None:
+    with gzip.open(raw_path(settings, company.cik), "rb") as handle:
+        body = handle.read()
+    if int(json.loads(body).get("cik", -1)) != company.cik:
+        raise IngestError(f"Cached SEC identity mismatch for {company.ticker}")
+    digest = hashlib.sha256(body).hexdigest()
+    blobs = raw_dir(settings) / "blobs"
+    blobs.mkdir(exist_ok=True)
+    blob = blobs / f"{digest}.json.gz"
+    if not blob.exists():
+        tmp = blob.with_suffix(".tmp")
+        tmp.write_bytes(gzip.compress(body, mtime=0))
+        tmp.replace(blob)
+    entry = manifest.setdefault(str(company.cik), {})
+    entry.update(
+        ticker=company.ticker,
+        sha256=digest,
+        bytes=len(body),
+        source_url=companyfacts_url(company.cik),
+    )
+    versions = entry.setdefault("versions", [])
+    if not any(version["sha256"] == digest for version in versions):
+        versions.append({"sha256": digest, "blob": str(blob.relative_to(raw_dir(settings)))})
+
+
 async def fetch_poc_universe(
     companies: Sequence[Company], settings: Settings, *, force: bool = False
 ) -> FetchReport:
@@ -249,11 +285,13 @@ async def fetch_poc_universe(
     todo: list[Company] = []
     for company in companies:
         if not force and raw_path(settings, company.cik).is_file():
+            _archive_cached_response(settings, company, manifest)
             report.cached.append(company.cik)
             continue
         todo.append(company)
 
     if not todo:
+        save_manifest(settings, manifest)
         return report
 
     async with SecClient(settings) as client:
@@ -263,13 +301,38 @@ async def fetch_poc_universe(
             if body is None:
                 report.missing.append(company.cik)
                 return
+            if int(json.loads(body).get("cik", -1)) != company.cik:
+                raise IngestError(f"SEC identity mismatch for {company.ticker}")
             target = raw_path(settings, company.cik)
+            blobs = raw_dir(settings) / "blobs"
+            blobs.mkdir(exist_ok=True)
+            previous = manifest.get(str(company.cik), {})
+            versions = list(previous.get("versions", []))
+            payloads = [body]
+            if target.exists():
+                with gzip.open(target, "rb") as old_handle:
+                    payloads.append(old_handle.read())
+            for payload in payloads:
+                digest = hashlib.sha256(payload).hexdigest()
+                blob = blobs / f"{digest}.json.gz"
+                if not blob.exists():
+                    blob_tmp = blob.with_suffix(".tmp")
+                    blob_tmp.write_bytes(gzip.compress(payload, mtime=0))
+                    blob_tmp.replace(blob)
+                if not any(item["sha256"] == digest for item in versions):
+                    versions.append(
+                        {"sha256": digest, "blob": str(blob.relative_to(raw_dir(settings)))}
+                    )
+
             tmp = target.with_suffix(".tmp")
             with gzip.open(tmp, "wb") as handle:
                 handle.write(body)
             tmp.replace(target)
             manifest[str(company.cik)] = {
                 "ticker": company.ticker,
+                "source_url": companyfacts_url(company.cik),
+                "versions": versions,
+                "checked_statement_accessions": previous.get("checked_statement_accessions", []),
                 "sha256": hashlib.sha256(body).hexdigest(),
                 "bytes": len(body),
                 "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -403,6 +466,16 @@ def load_parsed(
         """
     )
 
+    existing_root = settings.warehouse_dir / "fact"
+    existing_files = parquet_files(existing_root)
+    if existing_files:
+        columns = ", ".join(("fact_key", *FACT_COLUMNS))
+        con.execute(
+            f"CREATE OR REPLACE TEMP TABLE fact_retained AS SELECT {columns} FROM read_parquet(?, hive_partitioning=true) WHERE fact_key NOT IN (SELECT fact_key FROM fact_final)",
+            [[str(path) for path in existing_files]],
+        )
+        con.execute("INSERT INTO fact_final SELECT * FROM fact_retained")
+
     con.execute(
         "CREATE OR REPLACE TEMP TABLE fact_publish AS "
         "SELECT *, year(filed_date) AS filed_year FROM fact_final"
@@ -422,7 +495,7 @@ def load_parsed(
     # Securities are derived from the universe file, not from prices, so the
     # ticker -> CIK resolution the UI needs exists even when the price source is
     # unavailable.
-    build_securities(con, settings)
+    build_securities(con, settings, tuple(companies))
 
     # Readers may not open the DuckDB file, so the small tables they need are
     # snapshotted to the warehouse alongside the partitioned datasets.
@@ -458,7 +531,7 @@ def _load_entities(
     con.register("_entities", frame)
     con.execute(
         """
-        INSERT OR REPLACE INTO entity
+        INSERT INTO entity
           (cik, name, sic, sector, industry, country_inc, fiscal_year_end,
            first_filing, last_filing, is_active, updated_at)
         SELECT e.cik, e.name, NULL, e.sector, NULL, NULL, NULL,
@@ -468,6 +541,10 @@ def _load_entities(
           SELECT cik, min(filed_date) AS first_filing, max(filed_date) AS last_filing
           FROM fact_final GROUP BY cik
         ) f USING (cik)
+        ON CONFLICT(cik) DO UPDATE SET name=excluded.name,
+            sector=CASE WHEN excluded.sector='Unclassified' THEN entity.sector ELSE excluded.sector END,
+            first_filing=excluded.first_filing,last_filing=excluded.last_filing,
+            is_active=TRUE,updated_at=excluded.updated_at
         """
     )
     con.unregister("_entities")
@@ -486,7 +563,7 @@ def _load_filings(con: duckdb.DuckDBPyConnection) -> int:
     """
     con.execute(
         """
-        INSERT OR REPLACE INTO filing
+        INSERT INTO filing
           (accession_number, cik, form, filed_date, accepted_at, period_of_report,
            fiscal_year, fiscal_period, is_amendment, amends_accession,
            primary_doc_url, raw_path, raw_sha256)
@@ -502,6 +579,11 @@ def _load_filings(con: duckdb.DuckDBPyConnection) -> int:
                NULL, NULL, NULL, NULL
         FROM fact_final
         GROUP BY accession_number
+        ON CONFLICT(accession_number) DO UPDATE SET
+            form=excluded.form,filed_date=excluded.filed_date,
+            period_of_report=coalesce(filing.period_of_report,excluded.period_of_report),
+            fiscal_year=excluded.fiscal_year,fiscal_period=excluded.fiscal_period,
+            is_amendment=excluded.is_amendment
         """
     )
     return int(con.execute("SELECT count(*) FROM filing").fetchone()[0])
@@ -539,7 +621,9 @@ def parse_all(
 
 def peak_rss_mb() -> float:
     """Peak resident set size of this process, in MiB."""
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (
+        1024**2 if sys.platform == "darwin" else 1024
+    )
 
 
 def ingest_poc(

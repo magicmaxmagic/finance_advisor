@@ -19,6 +19,7 @@ the classic way to get silently wrong numbers.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from datetime import date
 from functools import lru_cache
@@ -136,6 +137,7 @@ def install_metric_macros(con: duckdb.DuckDBPyConnection) -> None:
 @lru_cache(maxsize=1)
 def code_version() -> str:
     """The git sha of the working tree, falling back to the package version."""
+    revision = f"v{__version__}"
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -146,8 +148,13 @@ def code_version() -> str:
             check=True,
         )
     except (subprocess.SubprocessError, OSError):
-        return f"v{__version__}"
-    return result.stdout.strip() or f"v{__version__}"
+        pass
+    else:
+        revision = result.stdout.strip() or revision
+    digest = hashlib.sha256()
+    for source in (Path(__file__), Path(__file__).with_name("pit.py")):
+        digest.update(source.read_bytes())
+    return revision + "-" + digest.hexdigest()[:16]
 
 
 def compute_metrics(con: duckdb.DuckDBPyConnection, as_of: date) -> pl.DataFrame:

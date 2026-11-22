@@ -80,6 +80,12 @@ concepts:
       - { tag: ProfitLoss, priority: 2 }
       - { tag: NetIncomeLossAvailableToCommonStockholdersBasic, priority: 3 }
 
+  eps_diluted:
+    description: Diluted earnings per share as reported for the selected period.
+    kind: flow
+    tags:
+      - { tag: EarningsPerShareDiluted, priority: 1 }
+
   # --- balance sheet (instants) --------------------------------------------
   total_assets:
     description: Total assets.
@@ -137,3 +143,34 @@ concepts:
       - { tag: PaymentsToAcquireOtherPropertyPlantAndEquipment, priority: 5 }
       # Integrated energy majors report additions to productive assets instead.
       - { tag: PaymentsForProceedsFromProductiveAssets, priority: 6 }
+
+  income_tax:
+    description: Income tax expense or benefit.
+    kind: flow
+    tags:
+      - { tag: IncomeTaxExpenseBenefit, priority: 1 }
+
+  pretax_income:
+    description: Income before income taxes, before noncontrolling interests.
+    kind: flow
+    tags:
+      - { tag: IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest, priority: 1 }
+      - { tag: IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments, priority: 2 }
+
+  depreciation_amortization:
+    description: Reported depreciation, depletion and amortization combined.
+    kind: flow
+    tags:
+      - { tag: DepreciationDepletionAndAmortization, priority: 1 }
+
+  noncontrolling_interest:
+    description: Noncontrolling interest in consolidated subsidiaries.
+    kind: instant
+    tags:
+      - { tag: MinorityInterest, priority: 1 }
+
+  preferred_equity:
+    description: Reported preferred equity value.
+    kind: instant
+    tags:
+      - { tag: PreferredStockValue, priority: 1 }

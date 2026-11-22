@@ -154,3 +154,44 @@ def test_publish_table_snapshots_a_small_table(
     assert publish_table(con, source="src", root=root, order_by=("cik",)) == 4
     assert (root / "part-0.parquet").is_file()
     assert con.execute(f"SELECT count(*) FROM read_parquet('{root}/*.parquet')").fetchone()[0] == 4
+
+
+def test_failed_partition_build_keeps_entire_previous_dataset(con, tmp_path, monkeypatch):
+    import finlab.ingest.warehouse as warehouse
+
+    root = tmp_path / "fact"
+    kwargs = dict(root=root, partition_columns=("taxonomy", "filed_year"), order_by=("cik",))
+    write_partitioned(con, source="src", **kwargs)
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*.parquet")}
+    con.execute("UPDATE src SET value=value*2")
+    original = warehouse._hive_component
+
+    def fail_late(column, value):
+        if str(value) == "us-gaap":
+            raise RuntimeError("interrupted build")
+        return original(column, value)
+
+    monkeypatch.setattr(warehouse, "_hive_component", fail_late)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        write_partitioned(con, source="src", **kwargs)
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*.parquet")} == before
+
+
+def test_delta_partition_write_preserves_untouched_partitions(con, tmp_path):
+    root = tmp_path / "fact"
+    kwargs = dict(root=root, partition_columns=("taxonomy", "filed_year"), order_by=("cik",))
+    write_partitioned(con, source="src", **kwargs)
+    con.execute("DELETE FROM src WHERE taxonomy='dei'")
+    write_partitioned(con, source="src", prune_missing=False, **kwargs)
+    assert (root / "taxonomy=dei" / "filed_year=2025" / "part-0.parquet").exists()
+
+
+def test_writer_recovers_dataset_interrupted_between_directory_renames(initialised):
+    from finlab.db.conn import write_conn
+
+    root = initialised.warehouse_dir / "price_daily"
+    root.mkdir(parents=True)
+    (root / "committed").write_text("previous complete dataset")
+    root.rename(root.with_name(".trash-price_daily-test"))
+    with write_conn(initialised):
+        assert (root / "committed").read_text() == "previous complete dataset"

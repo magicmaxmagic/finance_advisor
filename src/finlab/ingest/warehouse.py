@@ -2,9 +2,9 @@
 
 Ingestion never appends. A resumable run re-derives every partition it touches
 from the immutable raw files, so appending would double-count on the second
-run. Instead each partition is written to a staging directory and swapped into
-place with `os.replace`, which is atomic within a filesystem: a reader either
-sees the old partition or the new one, never a half-written directory.
+run. Instead all partitions are staged before replacing the working dataset. The
+writer restores the previous directory after interrupted replacement. Analytics
+reads independently published immutable epochs, never this working directory.
 
 The same writer serves `fact` (partitioned by taxonomy/filed_year) and
 `price_daily` (partitioned by year), and is what M1's bulk loader will use
@@ -169,7 +169,7 @@ def write_partitioned(
     compression: str = "zstd",
     prune_missing: bool = True,
 ) -> WriteResult:
-    """Rewrite every partition present in `source`, then swap them into `root`.
+    """Stage every partition, then replace the complete working dataset.
 
     `source` is a SQL relation — a table name, or a parenthesised subquery.
     Rows are sorted by `order_by` within each file so DuckDB's row-group
@@ -223,26 +223,20 @@ def write_partitioned(
             )
             written.append(PartitionWrite(values=values, path=root / relative, rows=count))
 
-        for partition in written:
-            source_dir = staging / partition.path.relative_to(root)
-            atomic_replace_dir(source_dir, partition.path)
+        keep = {p.path.relative_to(root) for p in written}
+        depth = len(partition_columns)
+        pruned: list[Path] = []
+        for existing in sorted(root.glob("/".join(["*"] * depth))):
+            if not existing.is_dir() or existing.relative_to(root) in keep:
+                continue
+            if prune_missing:
+                pruned.append(existing)
+            else:
+                shutil.copytree(existing, staging / existing.relative_to(root))
+        # Commit the complete dataset together. A failed partition write leaves
+        # every previous partition intact; published readers use immutable epochs.
+        atomic_replace_dir(staging, root)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-
-    pruned: list[Path] = []
-    if prune_missing:
-        keep = {p.path.resolve() for p in written}
-        depth = len(partition_columns)
-        for existing in sorted(root.glob("/".join(["*"] * depth))):
-            if existing.is_dir() and existing.resolve() not in keep:
-                shutil.rmtree(existing, ignore_errors=True)
-                pruned.append(existing)
-        # Removing a leaf can strand its ancestors: dropping every 2025 partition
-        # of a taxonomy leaves an empty `taxonomy=.../` behind, which reads as a
-        # partition that exists but has no data.
-        for level in range(depth - 1, 0, -1):
-            for directory in sorted(root.glob("/".join(["*"] * level)), reverse=True):
-                if directory.is_dir() and not any(directory.iterdir()):
-                    directory.rmdir()
 
     return WriteResult(partitions=tuple(written), rows=rows_seen, pruned=tuple(pruned))

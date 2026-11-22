@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS filing (
   amends_accession VARCHAR,
   primary_doc_url  VARCHAR,
   raw_path         VARCHAR,
-  raw_sha256       VARCHAR
+  raw_sha256       VARCHAR,
+  accepted_at_raw VARCHAR,
+  accepted_at_status VARCHAR DEFAULT 'unverified',
+  accepted_at_utc TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS filing_cik_filed ON filing(cik, filed_date);
@@ -148,7 +151,10 @@ CREATE TABLE IF NOT EXISTS price_daily (
   low         DOUBLE,
   close       DOUBLE,
   volume      BIGINT,
-  source      VARCHAR
+  source      VARCHAR,
+  adjusted_close DOUBLE,
+  adjustment_basis VARCHAR,
+  ingested_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS corporate_action (
@@ -157,6 +163,8 @@ CREATE TABLE IF NOT EXISTS corporate_action (
   action_type VARCHAR NOT NULL,   -- 'split','cash_dividend','spinoff'
   factor      DOUBLE,             -- 2.0 for a 2:1 split
   amount      DOUBLE,             -- dividend per share
+  source      VARCHAR,
+  ingested_at TIMESTAMPTZ,
   PRIMARY KEY (security_id, ex_date, action_type)
 );
 
@@ -375,3 +383,12 @@ CREATE TABLE IF NOT EXISTS job (
 );
 
 CREATE INDEX IF NOT EXISTS job_claim ON job(state, priority, not_before);
+
+CREATE TABLE price_ingestion (
+ security_id VARCHAR PRIMARY KEY,
+ source VARCHAR NOT NULL,
+ actions_checked_from DATE NOT NULL,
+ actions_checked_through DATE NOT NULL,
+ price_basis_date DATE NOT NULL,
+ ingested_at TIMESTAMPTZ NOT NULL
+);

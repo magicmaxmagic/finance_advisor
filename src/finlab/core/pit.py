@@ -32,7 +32,7 @@ CREATE OR REPLACE MACRO fundamentals_asof(as_of) AS TABLE
     SELECT
       f.cik, cm.canonical, f.period_start, f.period_end,
       f.duration_bucket, f.value * cm.sign AS value,
-      f.filed_date, f.accession_number,
+      f.filed_date, f.accession_number, f.tag AS source_tag, f.unit,
       ROW_NUMBER() OVER (
         PARTITION BY f.cik, cm.canonical, f.period_end, f.duration_bucket
         ORDER BY f.filed_date DESC, cm.priority ASC, f.accession_number DESC
@@ -42,6 +42,9 @@ CREATE OR REPLACE MACRO fundamentals_asof(as_of) AS TABLE
       ON cm.taxonomy = f.taxonomy AND cm.tag = f.tag
      AND f.filed_date BETWEEN cm.valid_from AND cm.valid_to
     WHERE f.filed_date <= as_of
+      AND f.period_end <= as_of
+      AND (f.unit = 'USD' OR
+           (cm.canonical IN ('eps_diluted', 'diluted_eps') AND f.unit = 'USD/shares'))
   ) WHERE rn = 1
 """
 
@@ -140,6 +143,7 @@ WITH resolved AS (
     ON cm.taxonomy = f.taxonomy AND cm.tag = f.tag
    AND f.filed_date BETWEEN cm.valid_from AND cm.valid_to
   WHERE f.duration_bucket IN ('annual', 'quarter')
+    AND cm.canonical <> 'eps_diluted' -- per-share earnings are not additive
 ),
 best AS (
   SELECT * EXCLUDE (rn) FROM (
@@ -182,12 +186,21 @@ GROUP BY cik, canonical, fy_start, fy_end, fy_filed, fy_accession
 HAVING count(*) = 3
 """
 
+COMMON_SHARES_PIT_SQL = """
+CREATE OR REPLACE MACRO common_shares_pit(as_of) AS TABLE
+SELECT cik,value AS shares,period_end,filed_date,accession_number FROM fact
+WHERE taxonomy='dei' AND tag='EntityCommonStockSharesOutstanding' AND unit='shares'
+AND filed_date<=as_of AND period_end<=as_of
+QUALIFY row_number() OVER(PARTITION BY cik ORDER BY period_end DESC,filed_date DESC,accession_number DESC)=1
+"""
+
 SHARES_ASOF_SQL = """
 CREATE OR REPLACE MACRO shares_outstanding_asof(as_of) AS TABLE
-  SELECT cik, last(value ORDER BY period_end) AS shares_outstanding
+  SELECT cik, last(value ORDER BY period_end, filed_date, accession_number) AS shares_outstanding
   FROM fact
   WHERE taxonomy = 'dei'
     AND tag = 'EntityCommonStockSharesOutstanding'
+    AND unit = 'shares' AND period_end <= as_of
     AND filed_date <= as_of
   GROUP BY cik
 """
@@ -235,6 +248,7 @@ def install_macros(con: duckdb.DuckDBPyConnection) -> tuple[str, ...]:
         con.execute(QUARTERLY_ASOF_SQL)
         installed.append("quarterly_asof")
     if _relation_exists(con, "fact"):
+        con.execute(COMMON_SHARES_PIT_SQL)
         con.execute(SHARES_ASOF_SQL)
         installed.append("shares_outstanding_asof")
     return tuple(installed)

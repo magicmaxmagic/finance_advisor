@@ -135,13 +135,25 @@ def _iter_archive_rows(
                         continue
 
 
-def build_securities(con: duckdb.DuckDBPyConnection, settings: Settings) -> int:
+def build_securities(
+    con: duckdb.DuckDBPyConnection, settings: Settings, companies: tuple[Company, ...] | None = None
+) -> int:
     """Populate `security` and `ticker_history` from the PoC universe.
 
     Needed independently of prices: the UI resolves a ticker to a CIK through
     this table, never by joining on the ticker string itself.
     """
-    companies = load_poc_universe()
+    companies = companies if companies is not None else load_poc_universe()
+    if len({c.security_id for c in companies}) != len(companies) or len(
+        {c.ticker for c in companies}
+    ) != len(companies):
+        raise ValueError("Universe contains duplicate security identifiers or tickers")
+    for company in companies:
+        previous = con.execute(
+            "SELECT cik FROM security WHERE security_id=?", [company.security_id]
+        ).fetchone()
+        if previous is not None and previous[0] is not None and previous[0] != company.cik:
+            raise ValueError("A stable security identifier cannot be reassigned to another issuer")
     frame = pl.DataFrame(
         {
             "security_id": [c.security_id for c in companies],
@@ -153,20 +165,28 @@ def build_securities(con: duckdb.DuckDBPyConnection, settings: Settings) -> int:
     con.register("_securities", frame)
     con.execute(
         """
-        INSERT OR REPLACE INTO security
+        INSERT INTO security
           (security_id, cik, ticker, exchange, share_class, currency,
            first_date, last_date, delisting_date, delisting_reason, is_active)
         SELECT security_id, cik, ticker, NULL, NULL, 'USD',
                NULL, NULL, NULL, NULL, TRUE
         FROM _securities
+        ON CONFLICT (security_id) DO UPDATE SET ticker=excluded.ticker, cik=excluded.cik,
+            is_active=TRUE
         """
     )
-    con.execute(
-        """
-        INSERT OR REPLACE INTO ticker_history (ticker, security_id, valid_from, valid_to)
-        SELECT ticker, security_id, DATE '1900-01-01', DATE '9999-12-31' FROM _securities
-        """
-    )
+    for company in companies:
+        # Explicit stable_id in universe YAML preserves identity through renames.
+        # Do not rewrite existing history or fabricate pre-capture membership.
+        con.execute(
+            "UPDATE ticker_history SET valid_to=greatest(valid_from,CURRENT_DATE-1) WHERE valid_to=DATE '9999-12-31' AND ((security_id=? AND ticker<>?) OR (ticker=? AND security_id<>?))",
+            [company.security_id, company.ticker, company.ticker, company.security_id],
+        )
+        con.execute(
+            """INSERT INTO ticker_history SELECT ?,?,CURRENT_DATE,DATE '9999-12-31'
+            WHERE NOT EXISTS (SELECT 1 FROM ticker_history WHERE ticker=? AND security_id=? AND valid_to=DATE '9999-12-31')""",
+            [company.ticker, company.security_id, company.ticker, company.security_id],
+        )
     con.unregister("_securities")
     publish_table(
         con, source="security", root=settings.warehouse_dir / "security", order_by=("ticker",)

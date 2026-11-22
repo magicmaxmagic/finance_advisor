@@ -44,5 +44,29 @@ def test_score_universe_preserves_missing_factors_and_explanation():
     )
 
     assert set(result["security_id"]) == {"US:A", "US:B"}
-    assert all(0 <= score <= 100 for score in result["overall_score"])
+    assert result.filter(pl.col("security_id") == "US:A")["overall_score"][0] is not None
+    assert result.filter(pl.col("security_id") == "US:B")["overall_score"][0] is None
+    assert result.filter(pl.col("security_id") == "US:B")["data_status"][0] == "insufficient_data"
     assert result.filter(pl.col("security_id") == "US:B")["data_completeness"][0] == 0.5
+
+
+def test_even_sample_median_and_duplicate_vintages():
+    assert robust_zscore([1.0, 3.0]) == pytest.approx([-1 / 1.4826, 1 / 1.4826])
+    frame = pl.DataFrame({"security_id": ["A", "A"], "factor": ["x", "x"], "value": [1.0, 2.0]})
+    with pytest.raises(ValueError, match="Duplicate"):
+        score_universe(frame, {"x": 1.0}, date(2024, 1, 1))
+
+
+def test_sector_normalization_does_not_confuse_sector_levels_with_stock_rank():
+    frame = pl.DataFrame(
+        {
+            "security_id": ["A", "B", "C", "D", "E", "F"],
+            "sector": ["Tech"] * 3 + ["Banks"] * 3,
+            "factor": ["quality"] * 6,
+            "value": [1.0, 2.0, 3.0, 10.0, 20.0, 30.0],
+        }
+    )
+    scored = score_universe(frame, {"quality": 1.0}, date(2020, 1, 1), sector_neutral=True)
+    a = scored.filter(pl.col("security_id") == "A")["overall_score"][0]
+    d = scored.filter(pl.col("security_id") == "D")["overall_score"][0]
+    assert a == pytest.approx(d)

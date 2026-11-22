@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
-CONTRACT_VERSION = "1"
+from finlab.db.conn import parquet_files
+
+CONTRACT_VERSION = "2"
 REQUIRED_DATASETS = (
     "entity",
     "filing",
@@ -44,6 +49,30 @@ def _tree_checksum(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _publish_file(source: Path, target: Path, objects: Path) -> None:
+    digest = _file_hash(source)
+    blob = objects / digest[:2] / digest
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    if not blob.exists() or _file_hash(blob) != digest:
+        temporary = blob.with_name("." + digest + "-" + uuid4().hex)
+        shutil.copyfile(source, temporary)
+        if _file_hash(temporary) != digest:
+            temporary.unlink()
+            raise RuntimeError("Working dataset changed during publication")
+        temporary.chmod(0o444)
+        temporary.replace(blob)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.link(blob, target)
+
+
 def publish_snapshot(
     *,
     warehouse_dir: Path,
@@ -51,12 +80,40 @@ def publish_snapshot(
 ) -> WarehouseSnapshot:
     """Atomically publish a manifest for a completed warehouse epoch."""
     now = datetime.now(UTC)
-    epoch = now.strftime("%Y%m%dT%H%M%SZ")
+    epoch = now.strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex
     dataset_status = {
         name: "ready" if (warehouse_dir / name).is_dir() else "missing"
-        for name in (*REQUIRED_DATASETS, "fact", "price_daily", "universe_snapshot")
+        for name in (
+            *REQUIRED_DATASETS,
+            "fact",
+            "price_daily",
+            "universe_snapshot",
+            "corporate_action",
+            "price_ingestion",
+            "ticker_history",
+        )
     }
-    checksums = {name: _tree_checksum(warehouse_dir / name) for name in dataset_status}
+    # The caller holds the warehouse writer lock throughout copying and publication.
+    # Copies intentionally avoid hard links: a working file may later be overwritten.
+    manifests = warehouse_dir / "snapshots"
+    manifests.mkdir(parents=True, exist_ok=True)
+    staging = manifests / f".{epoch}.staging"
+    destination = manifests / epoch
+    staging.mkdir()
+    try:
+        for name, status in dataset_status.items():
+            if status == "ready":
+                (staging / name).mkdir()
+                for source in parquet_files(warehouse_dir / name):
+                    _publish_file(
+                        source,
+                        staging / name / source.relative_to(warehouse_dir / name),
+                        manifests / ".objects",
+                    )
+        checksums = {name: _tree_checksum(staging / name) for name in dataset_status}
+        staging.replace(destination)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     snapshot = WarehouseSnapshot(
         contract_version=CONTRACT_VERSION,
         epoch=epoch,
@@ -82,9 +139,9 @@ def publish_snapshot(
     return snapshot
 
 
-def read_latest_snapshot(warehouse_dir: Path) -> WarehouseSnapshot | None:
+def read_latest_snapshot(warehouse_dir: Path, epoch: str | None = None) -> WarehouseSnapshot | None:
     """Read the latest analytics-compatible publication epoch."""
-    path = warehouse_dir / "snapshots" / "latest.json"
+    path = warehouse_dir / "snapshots" / (f"{epoch}.json" if epoch else "latest.json")
     if not path.is_file():
         return None
     payload = json.loads(path.read_text())

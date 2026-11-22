@@ -41,3 +41,25 @@ version or inventing a day that never traded.
 Nasdaq Trader serves only the *current* file, so a machine off from Monday to
 Friday recovers Friday alone. Monday through Thursday are lost permanently.
 If the host is not always on, that is the gap to think about — not the code.
+
+## macOS launchd
+
+`com.finlab.engine.plist` is a local LaunchAgent template for this checkout.
+Change its absolute paths when relocating the project. Create `.finlab/logs`
+first. Stop any manually started engine before loading it: only one writer is
+allowed. Install explicitly with:
+
+```bash
+mkdir -p ~/.Library/LaunchAgents .finlab/logs
+cp deploy/com.finlab.engine.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.finlab.engine.plist
+```
+
+The agent keeps `finlabd` running; its internal scheduler requests prices at
+18:30 America/New_York. Startup also enqueues a watermark recovery job. The
+handler targets the last completed local session using regular NYSE holiday
+rules and publishes only after prices and offline preparation succeed. The
+calendar follows [NYSE dates](https://www.nyse.com/markets/hours-calendars);
+extraordinary future closures require maintenance. Early-close days still use
+the conservative evening synchronization time. This template was parsed, not
+installed into launchd during development.

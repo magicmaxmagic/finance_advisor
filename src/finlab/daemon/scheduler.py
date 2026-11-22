@@ -48,12 +48,17 @@ SCHEDULE: tuple[ScheduledJob, ...] = (
         PRIORITY_UNIVERSE,
         "capture the symbol directory — cannot be backfilled",
     ),
-    ScheduledJob("prices", "0 6 * * mon-fri", PRIORITY_INGEST, "daily OHLCV"),
+    ScheduledJob("prices", "30 18 * * mon-fri", PRIORITY_INGEST, "daily OHLCV"),
     ScheduledJob("edgar_index", "0 7 * * *", PRIORITY_INGEST, "discover new filings"),
     ScheduledJob("submissions", "30 7 * * *", PRIORITY_INGEST, "acceptance times"),
     ScheduledJob("rebuild_derived", "0 8 * * *", PRIORITY_DERIVE, "concept map, Q4, metrics"),
     ScheduledJob("companyfacts_refresh", "0 3 * * sun", PRIORITY_MAINTENANCE, "weekly refresh"),
-    ScheduledJob("weekly_brief", "0 12 * * sat", PRIORITY_DERIVE, "weekly equity research"),
+    ScheduledJob(
+        "price_corrections",
+        "0 2 1-7 * sun",
+        PRIORITY_MAINTENANCE,
+        "monthly historical price correction audit",
+    ),
     ScheduledJob("coverage_check", "0 4 * * sun", PRIORITY_MAINTENANCE, "concept coverage"),
 )
 
@@ -71,7 +76,9 @@ def build_scheduler(enqueue_fn: Callable[[str, int], None]) -> AsyncIOScheduler:
                 day=day,
                 month=month,
                 day_of_week=day_of_week,
-                timezone="UTC" if entry.job_type == "weekly_brief" else None,
+                timezone="America/New_York"
+                if entry.job_type in {"prices", "universe_snapshot"}
+                else "UTC",
             ),
             args=[entry.job_type, entry.priority],
             id=entry.job_type,

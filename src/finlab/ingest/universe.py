@@ -78,6 +78,7 @@ class Company:
     ticker: str
     sector: str
     name: str
+    stable_id: str | None = None
 
     @property
     def security_id(self) -> str:
@@ -85,17 +86,23 @@ class Company:
 
         Built from the CIK, not the ticker, because tickers are recycled.
         """
-        return f"US:{self.cik:010d}:{self.ticker}"
+        return self.stable_id or f"US:{self.cik:010d}:{self.ticker}"
 
 
 class UniverseError(RuntimeError):
     """The universe file is missing or malformed."""
 
 
-@lru_cache(maxsize=4)
 def load_poc_universe(path: Path | None = None) -> tuple[Company, ...]:
     """Load and validate the PoC universe, ordered by ticker."""
-    target = path or POC_UNIVERSE_PATH
+    target = path or get_settings().universe_path or POC_UNIVERSE_PATH
+    return _load_universe_file(
+        target.resolve(), target.stat().st_mtime_ns if target.exists() else 0
+    )
+
+
+@lru_cache(maxsize=8)
+def _load_universe_file(target: Path, modified_ns: int) -> tuple[Company, ...]:
     if not target.is_file():
         raise UniverseError(f"PoC universe file not found: {target}")
 
@@ -122,6 +129,7 @@ def load_poc_universe(path: Path | None = None) -> tuple[Company, ...]:
                 ticker=str(entry["ticker"]),
                 sector=str(entry["sector"]),
                 name=str(entry["name"]),
+                stable_id=str(entry["security_id"]) if entry.get("security_id") else None,
             )
         )
     return tuple(sorted(companies, key=lambda c: c.ticker))
@@ -269,10 +277,15 @@ def capture_snapshot(
     ]
     nasdaq_count = sum(1 for r in records if r["exchange"] == "NASDAQ")
 
+    configured_ids = {
+        company.ticker: (company.cik, company.security_id)
+        for company in load_poc_universe(cfg.universe_path)
+    }
     seen: set[str] = set()
     rows: list[dict[str, Any]] = []
     for record in records:
-        ticker = record["ticker"].upper()
+        source_ticker = record["ticker"].upper()
+        ticker = source_ticker.replace(".", "-")
         if ticker in seen:
             continue  # a few symbols appear in both files
         seen.add(ticker)
@@ -280,7 +293,10 @@ def capture_snapshot(
         rows.append(
             {
                 "snapshot_date": snapshot_date,
-                "security_id": f"US:{cik:010d}:{ticker}",
+                "source_ticker": source_ticker,
+                "security_id": configured_ids[ticker][1]
+                if ticker in configured_ids and configured_ids[ticker][0] == cik
+                else f"US:{cik:010d}:{ticker}",
                 "ticker": ticker,
                 "cik": cik,
                 "name": record["name"],
@@ -296,6 +312,7 @@ def capture_snapshot(
         rows,
         schema={
             "snapshot_date": pl.Date,
+            "source_ticker": pl.Utf8,
             "security_id": pl.Utf8,
             "ticker": pl.Utf8,
             "cik": pl.Int32,
@@ -359,7 +376,7 @@ def rebuild_securities(con: duckdb.DuckDBPyConnection, settings: Settings | None
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE _snapshots AS
-        SELECT * FROM read_parquet('{glob}', hive_partitioning = true)
+        SELECT * FROM read_parquet('{glob}', hive_partitioning = true, union_by_name = true)
         """
     )
     latest = con.execute("SELECT max(snapshot_date) FROM _snapshots").fetchone()[0]

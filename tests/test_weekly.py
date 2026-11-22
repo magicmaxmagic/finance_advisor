@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from finlab.analytics.scheduler import weekly_trigger
 from finlab.daemon.main import HANDLERS
 from finlab.daemon.scheduler import build_scheduler
 from finlab.ingest import companyfacts
@@ -96,9 +97,9 @@ def test_reject_old_benchmark_and_stale_fundamentals(inputs):
 def test_new_york_cutoff_and_utc_daemon():
     assert completed_friday(datetime(2026, 11, 21, 3, tzinfo=UTC)) == date(2026, 11, 13)
     assert completed_friday(datetime(2026, 11, 21, 5, tzinfo=UTC)) == WEEK
-    job = build_scheduler(lambda *_: None).get_job("weekly_brief")
-    assert job.id in HANDLERS
-    assert str(job.trigger.timezone) == "UTC"
+    assert build_scheduler(lambda *_: None).get_job("weekly_brief") is None
+    assert "weekly_brief" not in HANDLERS
+    assert str(weekly_trigger().timezone) == "UTC"
 
 
 def test_archive_is_immutable_and_csv_is_reusable(tmp_path, inputs):
@@ -168,22 +169,31 @@ def test_weekly_pipeline_with_sec_wire_format(settings, monkeypatch, tmp_path, i
     }
 
     async def fetch(companies, cfg, *, force):
-        assert force and companies == (FILER,)
-        return companyfacts.FetchReport(downloaded=[1])
+        raise AssertionError("Weekly Analytics must not fetch SEC data")
 
     monkeypatch.setattr(companyfacts, "fetch_poc_universe", fetch)
     monkeypatch.setattr(companyfacts, "load_manifest", lambda _: {"1": {"sha256": "fixture"}})
     monkeypatch.setattr(companyfacts, "read_raw", lambda *_: document)
     with zipfile.ZipFile(archive_report(tmp_path, {"week": str(WEEK)}, bars)) as bundle:
         csv = Path(bundle.extract("prices.csv", tmp_path))
+    from finlab.db.conn import write_conn
+    from finlab.db.migrations import init_database
+    from finlab.engine.prepare import prepare_warehouse
+
+    with write_conn(settings) as con:
+        init_database(con)
+        companyfacts.load_parsed(
+            con, companyfacts.parse_companyfacts(document), (FILER,), settings, {}
+        )
+        prepare_warehouse(con, settings, WEEK)
     result = weekly_report.generate(settings, prices=csv)
     brief = read_brief(result)
     (row,) = brief["rows"]
     assert row["status"] == "Buy candidate"
     assert row["evidence"]["Diluted EPS"]["value"] == 4
     assert row["growth"] == pytest.approx(0.2)
-    assert brief["sec_document_hashes"]["AAA"] == "fixture"
-    assert weekly_report.generate(settings) == result
+    assert brief["sec_document_hashes"]["warehouse_epoch"]
+    assert weekly_report.generate(settings, prices=csv) == result
     assert "future" not in json.dumps(brief)
 
 

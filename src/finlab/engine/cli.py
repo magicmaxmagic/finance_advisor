@@ -44,5 +44,42 @@ def publish() -> None:
     typer.echo(f"published epoch={snapshot.epoch} contract={snapshot.contract_version}")
 
 
+@app.command("sync-prices")
+def sync_prices_command() -> None:
+    """Recover missing price tails with a recent-correction overlap."""
+    from datetime import date
+
+    from finlab.ingest.price_sync import sync_prices
+    from finlab.ingest.yahoo import YahooProvider
+
+    settings = get_settings()
+    with write_conn(settings) as con:
+        reports = sync_prices(con, settings, YahooProvider(), end=date.today())
+    typer.echo(f"Synchronized {len(reports)} request windows; publication is separate.")
+
+
+@app.command("sync")
+def sync(full: bool = False) -> None:
+    """Synchronize filings, prices and actions, then publish one complete epoch."""
+    from finlab.daemon.main import handle_prices_yahoo
+
+    settings = get_settings()
+    with write_conn(settings) as con:
+        typer.echo(handle_prices_yahoo(con, settings, {"full": full}))
+
+
+@app.command("prepare")
+def prepare() -> None:
+    """Build canonical fundamentals and publish existing local history offline."""
+    from datetime import date
+
+    from finlab.engine.prepare import prepare_warehouse
+
+    cfg = get_settings()
+    with write_conn(cfg) as con:
+        snapshot = prepare_warehouse(con, cfg, date.today())
+    typer.echo(f"Prepared and published {snapshot.epoch}")
+
+
 if __name__ == "__main__":
     app()

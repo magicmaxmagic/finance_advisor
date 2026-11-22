@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import hashlib
 import io
@@ -16,9 +15,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
-import httpx
-
-from finlab.ingest.weekly_prices import COLUMNS, download, read_csv
+from finlab.ingest.weekly_prices import COLUMNS, read_csv
 from finlab.research.weekly import BENCHMARK, MODEL, Bars, Filing, completed_friday, screen
 
 if TYPE_CHECKING:
@@ -26,11 +23,22 @@ if TYPE_CHECKING:
 
 
 def _annual_facts(settings: Settings, companies: tuple, week: date) -> tuple[dict, dict]:
-    from finlab.ingest.companyfacts import fetch_poc_universe
+    from finlab.analytics.snapshot import published_read_conn
+    from finlab.core.pit import install_macros
 
-    # A failed refresh never silently reuses old files.
-    fetched = asyncio.run(fetch_poc_universe(companies, settings, force=True))
-    return resolve_annual_facts(settings, companies, week, set(fetched.downloaded))
+    facts = defaultdict(lambda: defaultdict(list))
+    with published_read_conn(settings) as con:
+        install_macros(con)
+        epoch = con.execute("SELECT epoch FROM _warehouse_publication").fetchone()[0]
+        rows = con.execute(
+            "SELECT cik,canonical,period_end,value,filed_date,accession_number FROM fundamentals_asof(?) WHERE duration_bucket='annual' AND canonical IN ('revenue','eps_diluted') AND cik IN (SELECT unnest(?)) ORDER BY cik,canonical,period_end DESC",
+            [week, [company.cik for company in companies]],
+        ).fetchall()
+    for cik, canonical, period, value, filed, accession in rows:
+        facts[cik]["diluted_eps" if canonical == "eps_diluted" else canonical].append(
+            Filing(period, value, filed, accession)
+        )
+    return facts, {"warehouse_epoch": epoch}
 
 
 def resolve_annual_facts(
@@ -104,6 +112,7 @@ def resolve_annual_facts(
             .group_by(keys)
             .agg(
                 pl.col("period_start").min(),
+                pl.col("unit").first(),
                 pl.when(pl.col("value").n_unique() == 1)
                 .then(pl.col("value").first())
                 .otherwise(float("nan"))
@@ -141,10 +150,12 @@ def resolve_annual_facts(
     return facts, hashes
 
 
-def archive_report(directory: Path, brief: dict, bars: Bars) -> Path:
+def archive_report(
+    directory: Path, brief: dict, bars: Bars, *, revision: str | None = None
+) -> Path:
     """Publish once, atomically. Readers see either the complete ZIP or no ZIP."""
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / f"{brief['week']}.zip"
+    target = directory / (f"{brief['week']}-{revision}.zip" if revision else f"{brief['week']}.zip")
     with TemporaryDirectory(dir=directory) as stage:
         tmp = Path(stage) / "brief.zip"
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -178,27 +189,48 @@ def generate(
         raise ValueError("The requested US trading week has not closed.")
     directory = settings.reports_dir / "weekly"
     target = directory / f"{week}.zip"
-    if target.is_file():
+    if prices is not None and target.is_file():
         return target
+    if prices is None:
+        from finlab.analytics.recommendations import recommendation_report
+
+        report = recommendation_report(week, settings=settings)
+        from finlab.analytics.recommendations import archive_recommendations
+        from finlab.analytics.research_context import compare_reports
+
+        candidates = []
+        for path in (settings.reports_dir / "recommendations").glob("*.json"):
+            prior = json.loads(path.read_text())
+            if (
+                prior.get("as_of", "") < str(week)
+                and prior.get("model_version") == report["model_version"]
+                and "code_sha256" in prior
+            ):
+                candidates.append((prior["as_of"], path, prior))
+        changes = {"status": "previous_report_unavailable"}
+        if candidates:
+            _, prior_path, prior = max(candidates, key=lambda item: (item[0], item[1].name))
+            changes = compare_reports(prior, report)
+            changes["previous_archive"] = prior_path.name
+        archive_recommendations(report, settings.reports_dir / "recommendations")
+        for row in report["rows"]:
+            row["status"] = row["category"]
+        brief = {
+            **report,
+            "score_changes": changes,
+            "week": week.isoformat(),
+            "generated_at": now.isoformat(),
+            "model": report["model_version"],
+            "source": "Validated local warehouse",
+            "benchmark": BENCHMARK,
+        }
+        return archive_report(
+            directory, brief, {}, revision=report["model_version"] + "-" + report["warehouse_epoch"]
+        )
     companies = load_poc_universe()
-    if prices:
-        bars = read_csv(prices, week)
-        source = f"Imported daily USD prices: {prices.name}"
-        source_digest = hashlib.sha256(prices.read_bytes()).hexdigest()
-    else:
-        if not settings.alpaca_key_id or not settings.alpaca_secret_key:
-            raise ValueError(
-                "Set FINLAB_ALPACA_KEY_ID and FINLAB_ALPACA_SECRET_KEY, or pass --prices-csv."
-            )
-        with httpx.Client(
-            timeout=45,
-            headers={
-                "APCA-API-KEY-ID": settings.alpaca_key_id.get_secret_value(),
-                "APCA-API-SECRET-KEY": settings.alpaca_secret_key.get_secret_value(),
-            },
-        ) as client:
-            bars = download(client, [BENCHMARK, *(c.ticker for c in companies)], week)
-        source, source_digest = "Alpaca IEX daily bars (USD)", None
+    bars = read_csv(prices, week)
+    source = f"Imported daily USD prices: {prices.name}"
+    source_digest = hashlib.sha256(prices.read_bytes()).hexdigest()
     facts, hashes = _annual_facts(settings, companies, week)
     rows = screen(companies, bars, facts, week)
     if not any("tests" in row for row in rows):

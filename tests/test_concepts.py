@@ -18,6 +18,12 @@ from finlab.core.pit import build_q4_table, install_macros
 from finlab.ingest.universe import UniverseError, load_poc_universe, sectors
 
 EXPECTED_CONCEPTS = {
+    "income_tax",
+    "pretax_income",
+    "depreciation_amortization",
+    "noncontrolling_interest",
+    "preferred_equity",
+    "eps_diluted",
     "revenue",
     "cogs",
     "gross_profit",
@@ -42,7 +48,7 @@ def _write(tmp_path: Path, body: str) -> Path:
 # --- the shipped file -------------------------------------------------------
 
 
-def test_the_shipped_map_declares_exactly_the_twelve_concepts() -> None:
+def test_the_shipped_map_declares_exactly_the_expected_concepts() -> None:
     assert set(canonical_concepts()) == EXPECTED_CONCEPTS
 
 
@@ -239,3 +245,12 @@ def test_instants_are_not_given_a_derived_q4(q4_con: duckdb.DuckDBPyConnection) 
         for r in q4_con.execute("SELECT DISTINCT duration_bucket FROM fundamentals_q4").fetchall()
     }
     assert buckets == {"quarter"}
+
+
+def test_major_universe_profile_has_one_hundred_verified_unique_issuers():
+    path = Path(__file__).resolve().parents[1] / "src/finlab/data/major_us_universe.yaml"
+    companies = load_poc_universe(path)
+    assert len(companies) == 100
+    assert len({company.cik for company in companies}) == 100
+    assert len({company.security_id for company in companies}) == 100
+    assert all(company.stable_id for company in companies)

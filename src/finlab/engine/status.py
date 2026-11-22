@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -43,8 +42,8 @@ def read_status(settings_dir: Path) -> dict:
     target = settings_dir / "status.json"
     if not target.is_file():
         return {
-            "updated_at": datetime.now(UTC).isoformat(),
-            "pipeline_state": "idle",
+            "updated_at": None,
+            "pipeline_state": "not_started",
             "steps": [],
         }
     return json.loads(target.read_text())

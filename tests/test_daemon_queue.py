@@ -204,3 +204,13 @@ def test_completed_jobs_are_purged_after_their_window(con: duckdb.DuckDBPyConnec
     queue.complete(con, job.job_id)
     assert queue.purge_done(con, older_than=timedelta(days=7)) == 0
     assert queue.purge_done(con, older_than=timedelta(0)) == 1
+
+
+def test_interrupted_work_precedes_new_publication_and_preserves_attempt_credit(con):
+    queue.enqueue(con, "correction", {"n": 1}, priority=200)
+    first = queue.claim(con)
+    queue.enqueue(con, "fresh_publish", {"n": 2}, priority=10)
+    queue.reclaim_stale(con, older_than=timedelta(0))
+    resumed = queue.claim(con)
+    assert resumed.job_id == first.job_id
+    assert resumed.attempts == first.attempts

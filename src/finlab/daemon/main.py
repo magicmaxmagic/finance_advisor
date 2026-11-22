@@ -19,8 +19,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal
-from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import duckdb
@@ -82,7 +82,7 @@ def handle_submissions(
 ) -> str:
     from finlab.ingest.submissions import ingest_submissions
 
-    report = ingest_submissions(con, settings)
+    report = ingest_submissions(con, settings, force=True, refresh_archives=False)
     return f"{report.filings_updated} filings carry accepted_at"
 
 
@@ -145,36 +145,53 @@ def handle_coverage_check(
 def handle_prices_yahoo(
     con: duckdb.DuckDBPyConnection, settings: Settings, payload: dict[str, Any]
 ) -> str:
+    from finlab.engine.prepare import prepare_warehouse
+    from finlab.ingest.calendar import last_completed_session
+    from finlab.ingest.price_sync import sync_prices
     from finlab.ingest.yahoo import YahooProvider
-    from finlab.ingest.yahoo_loader import load_yahoo_prices
 
-    end = date.today()
-    start = end - timedelta(days=10)
-    report = load_yahoo_prices(
-        con,
-        settings,
-        YahooProvider(timeout=30.0),
-        start=start,
-        end=end,
+    end = last_completed_session(datetime.now(UTC))
+    if not settings.sec_user_agent_is_placeholder:
+        from finlab.engine.financial_sync import sync_financials
+
+        sync_financials(con, settings)
+    reports = sync_prices(
+        con, settings, YahooProvider(timeout=30.0), end=end, full=bool(payload.get("full"))
     )
+    snapshot = prepare_warehouse(con, settings, end)
     return (
-        f"Yahoo refresh {start.isoformat()} to {end.isoformat()}: "
-        f"{report.rows} retained rows, {report.corporate_actions} actions"
+        f"Yahoo incremental refresh epoch {snapshot.epoch}: {len(reports)} windows, "
+        f"{sum(report.corporate_actions for report in reports)} actions"
     )
 
 
-def handle_weekly_brief(
-    con: duckdb.DuckDBPyConnection, settings: Settings, payload: dict[str, Any]
-) -> str:
-    from finlab.research.weekly_report import generate
+def handle_price_corrections(con, settings, payload):
+    return handle_prices_yahoo(con, settings, {**payload, "full": True})
 
-    day = date.fromisoformat(payload["scheduled_for"]) if "scheduled_for" in payload else None
-    return str(generate(settings, scheduled=day))
+
+def handle_companyfacts_refresh(con, settings, payload):
+    from finlab.engine.financial_sync import sync_financials
+    from finlab.engine.prepare import prepare_warehouse
+
+    count = sync_financials(con, settings, full=True)
+    snapshot = prepare_warehouse(con, settings, datetime.now(UTC).date())
+    return f"SEC correction refresh: {count} companies, epoch {snapshot.epoch}"
+
+
+def handle_edgar_index(con, settings, payload):
+    from finlab.engine.financial_sync import sync_financials
+    from finlab.engine.prepare import prepare_warehouse
+
+    count = sync_financials(con, settings)
+    snapshot = prepare_warehouse(con, settings, datetime.now(UTC).date())
+    return f"SEC filing updates: {count} affected companies, epoch {snapshot.epoch}"
 
 
 HANDLERS: dict[str, Handler] = {
-    "weekly_brief": handle_weekly_brief,
+    "companyfacts_refresh": handle_companyfacts_refresh,
+    "edgar_index": handle_edgar_index,
     "prices": handle_prices_yahoo,
+    "price_corrections": handle_price_corrections,
     "universe_snapshot": handle_universe_snapshot,
     "submissions": handle_submissions,
     "rebuild_derived": handle_rebuild_derived,
@@ -193,13 +210,16 @@ class Daemon:
         self._db_lock = asyncio.Lock()
         self._last_reclaim = datetime.min
 
-    def _enqueue_scheduled(self, con: duckdb.DuckDBPyConnection) -> Callable[[str, int], None]:
-        def enqueue_fn(job_type: str, priority: int) -> None:
+    def _enqueue_scheduled(
+        self, con: duckdb.DuckDBPyConnection
+    ) -> Callable[[str, int], Awaitable[None]]:
+        async def enqueue_fn(job_type: str, priority: int) -> None:
             # The scheduled date is part of the payload so each day is a
             # distinct job. Without it every run would hash to one job_id and
             # INSERT OR IGNORE would silently drop every day after the first.
             today = datetime.now(UTC).date().isoformat()
-            job_id = queue.enqueue(con, job_type, {"scheduled_for": today}, priority=priority)
+            async with self._db_lock:
+                job_id = queue.enqueue(con, job_type, {"scheduled_for": today}, priority=priority)
             log.info("scheduled", job_type=job_type, job_id=job_id, date=today)
 
         return enqueue_fn
@@ -212,6 +232,32 @@ class Daemon:
             return
 
         bound = log.bind(job_id=job.job_id, job_type=job.job_type, attempt=job.attempts)
+        from finlab.engine.status import IngestionStatus, IngestionStep, write_status
+
+        start_time = datetime.now(UTC).isoformat()
+
+        def status(state, detail, elapsed=None):
+            step = IngestionStep(
+                job.job_type,
+                state,
+                start_time,
+                datetime.now(UTC).isoformat() if state != "running" else None,
+                elapsed,
+                None,
+                1.0 if state == "done" else 0.0,
+                0,
+                0,
+                detail,
+            )
+            try:
+                write_status(
+                    self.settings.data_dir / "control",
+                    IngestionStatus(datetime.now(UTC).isoformat(), state, [step]),
+                )
+            except OSError as exc:
+                log.warning("status publication failed", error=str(exc))
+
+        status("running", "Data Engine job in progress")
         bound.info("job started")
         started = asyncio.get_running_loop().time()
         try:
@@ -220,13 +266,16 @@ class Daemon:
             # Never a failure: quota is a scheduling fact. The attempt is given
             # back so a busy afternoon cannot deadletter a day of work.
             queue.defer(con, job, exc.retry_after, str(exc))
+            status("retrying", str(exc))
             bound.warning("job deferred", retry_after=exc.retry_after, reason=str(exc))
         except Exception as exc:
             state = queue.fail(con, job, f"{type(exc).__name__}: {exc}")
+            status(state, str(exc))
             bound.error("job failed", state=state, error=str(exc), exc_info=True)
         else:
             queue.complete(con, job.job_id)
             elapsed = asyncio.get_running_loop().time() - started
+            status("done", detail, round(elapsed, 2))
             bound.info("job done", seconds=round(elapsed, 2), detail=detail)
 
     async def _maintenance(self, con: duckdb.DuckDBPyConnection) -> None:
@@ -242,6 +291,9 @@ class Daemon:
     async def _worker(self, con: duckdb.DuckDBPyConnection) -> None:
         while not self.stopping.is_set():
             async with self._db_lock:
+                from finlab.engine.control import drain_requests
+
+                drain_requests(con, self.settings.data_dir)
                 await self._maintenance(con)
                 job = queue.claim(con, job_types=list(HANDLERS))
             if job is None:
@@ -272,11 +324,16 @@ class Daemon:
             if unhandled:
                 log.info("schedule entries without a handler yet", job_types=unhandled)
 
+            # A fresh in-process scheduler cannot replay triggers missed while
+            # stopped. A watermark-based synchronization catches up once at boot.
+            from finlab.ingest.calendar import last_completed_session
+
+            target = last_completed_session(datetime.now(UTC)).isoformat()
+            queue.enqueue(con, "prices", {"catch_up_through": target}, priority=50)
+
             scheduler = build_scheduler(self._enqueue_scheduled(con))
             for job_id in [s.job_type for s in SCHEDULE if s.job_type not in HANDLERS]:
                 scheduler.remove_job(job_id)
-            if not (self.settings.alpaca_key_id and self.settings.alpaca_secret_key):
-                scheduler.remove_job("weekly_brief")
             scheduler.start()
 
             loop = asyncio.get_running_loop()

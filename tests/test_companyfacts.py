@@ -211,3 +211,46 @@ def test_conflicting_fact_keys_are_detected() -> None:
         "HAVING count(DISTINCT value) > 1)"
     ).fetchone()[0]
     assert conflicts == 1, "the acc-1 pair conflicts; the acc-2 row is a legitimate restatement"
+
+
+def test_refresh_retains_historical_facts_and_filing_acceptance(initialised):
+    from datetime import datetime
+
+    from finlab.db.conn import write_conn
+    from finlab.ingest.companyfacts import load_parsed
+    from finlab.ingest.universe import Company
+
+    company = Company(320193, "AAPL", "Technology", "Apple")
+
+    def observation(year, value):
+        return {
+            "start": f"{year}-01-01",
+            "end": f"{year}-12-31",
+            "val": value,
+            "accn": f"fy-{year}",
+            "fy": year,
+            "fp": "FY",
+            "form": "10-K",
+            "filed": f"{year + 1}-02-01",
+        }
+
+    with write_conn(initialised) as con:
+        load_parsed(
+            con, parse_companyfacts(_payload([observation(2020, 100)])), (company,), initialised, {}
+        )
+        con.execute(
+            "UPDATE filing SET accepted_at=TIMESTAMP '2021-02-01 20:00:00',primary_doc_url='https://www.sec.gov/example' WHERE accession_number='fy-2020'"
+        )
+        load_parsed(
+            con, parse_companyfacts(_payload([observation(2021, 120)])), (company,), initialised, {}
+        )
+        values = con.execute(
+            "SELECT period_end,value FROM read_parquet(?) ORDER BY period_end",
+            [str(initialised.warehouse_dir / "fact/**/*.parquet")],
+        ).fetchall()
+        assert values == [(date(2020, 12, 31), 100.0), (date(2021, 12, 31), 120.0)]
+        accepted, url = con.execute(
+            "SELECT accepted_at,primary_doc_url FROM filing WHERE accession_number='fy-2020'"
+        ).fetchone()
+        assert accepted == datetime(2021, 2, 1, 20)
+        assert url == "https://www.sec.gov/example"

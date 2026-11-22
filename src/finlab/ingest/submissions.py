@@ -7,22 +7,27 @@ information it did not have. This module fills it in, along with
 `period_of_report` and the primary document URL, plus the SIC code, fiscal year
 end and state of incorporation that `entity` has been carrying as NULLs.
 
-**`acceptanceDateTime` is Eastern Time despite its `Z` suffix.** The SEC
-publishes it against the filing desk's clock, not UTC. It is stored naive, as
-ET, because converting it to UTC on the way in would silently shift every
-same-day timing decision by four or five hours depending on the season.
+Submissions JSON acceptance strings are retained verbatim with an unverified
+clock status. The legacy naive field remains for compatibility; it must not be
+used as an intraday instant. Only SGML ACCEPTANCE-DATETIME verification populates
+accepted_at_utc. Daily research uses filed dates and next-session execution.
+
 """
 
 from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
+import html
 import json
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import duckdb
 import polars as pl
@@ -63,7 +68,7 @@ def _as_date(value: object) -> date | None:
 
 
 def _as_timestamp(value: object) -> datetime | None:
-    """Parse `2026-07-31T10:01:02.000Z` as a naive Eastern-Time timestamp."""
+    """Legacy wall-clock parsing only; this does not establish a verified instant."""
     if not isinstance(value, str) or not value:
         return None
     text = value.rstrip("Z")
@@ -107,6 +112,10 @@ def parse_submissions(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 "cik": cik,
                 "form": at("form"),
                 "filed_date": _as_date(at("filingDate")),
+                "accepted_at_raw": str(at("acceptanceDateTime"))
+                if at("acceptanceDateTime") is not None
+                else None,
+                "accepted_at_status": "unverified_sec_json",
                 "accepted_at": _as_timestamp(at("acceptanceDateTime")),
                 "period_of_report": _as_date(at("reportDate")),
                 "primary_doc_url": primary_doc_url(cik, accession, at("primaryDocument") or ""),
@@ -125,10 +134,24 @@ def entity_descriptors(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def page_path(settings: Settings, name: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+        raise ValueError("Unsafe SEC submissions page name")
     return raw_dir(settings) / f"{name}.gz"
 
 
 def _write_gz(target: Path, body: bytes) -> None:
+    blobs = target.parent / "blobs"
+    blobs.mkdir(parents=True, exist_ok=True)
+    payloads = [body]
+    if target.exists():
+        with gzip.open(target, "rb") as handle:
+            payloads.append(handle.read())
+    for payload in payloads:
+        blob = blobs / f"{hashlib.sha256(payload).hexdigest()}.json.gz"
+        if not blob.exists():
+            blob_tmp = blob.with_suffix(".tmp")
+            blob_tmp.write_bytes(gzip.compress(payload, mtime=0))
+            blob_tmp.replace(blob)
     tmp = target.with_suffix(".tmp")
     with gzip.open(tmp, "wb") as handle:
         handle.write(body)
@@ -136,7 +159,11 @@ def _write_gz(target: Path, body: bytes) -> None:
 
 
 async def fetch_submissions(
-    companies: Sequence[Company], settings: Settings, *, force: bool = False
+    companies: Sequence[Company],
+    settings: Settings,
+    *,
+    force: bool = False,
+    refresh_archives: bool | None = None,
 ) -> list[int]:
     """Download the submissions documents for each company. Returns missing CIKs.
 
@@ -172,7 +199,10 @@ async def fetch_submissions(
                 payload = json.load(handle)
             for entry in (payload.get("filings") or {}).get("files") or []:
                 name = entry.get("name")
-                if name and (force or not page_path(settings, name).is_file()):
+                if name and (
+                    (force if refresh_archives is None else refresh_archives)
+                    or not page_path(settings, name).is_file()
+                ):
                     pages.append(name)
 
         if pages:
@@ -225,6 +255,8 @@ def load_submissions(
             "form": pl.Utf8,
             "filed_date": pl.Date,
             "accepted_at": pl.Datetime("us"),
+            "accepted_at_raw": pl.Utf8,
+            "accepted_at_status": pl.Utf8,
             "period_of_report": pl.Date,
             "primary_doc_url": pl.Utf8,
         },
@@ -237,6 +269,8 @@ def load_submissions(
         """
         UPDATE filing SET
           accepted_at = s.accepted_at,
+          accepted_at_raw = s.accepted_at_raw,
+          accepted_at_status = CASE WHEN filing.accepted_at_utc IS NOT NULL THEN filing.accepted_at_status ELSE s.accepted_at_status END,
           period_of_report = coalesce(s.period_of_report, filing.period_of_report),
           primary_doc_url = s.primary_doc_url,
           form = coalesce(s.form, filing.form),
@@ -297,10 +331,36 @@ def ingest_submissions(
     settings: Settings | None = None,
     *,
     force: bool = False,
+    refresh_archives: bool | None = None,
 ) -> SubmissionsReport:
     cfg = settings or get_settings()
     companies = load_poc_universe()
-    missing = asyncio.run(fetch_submissions(companies, cfg, force=force))
+    missing = asyncio.run(
+        fetch_submissions(companies, cfg, force=force, refresh_archives=refresh_archives)
+    )
     report = load_submissions(con, companies, cfg)
     report.missing = missing
     return report
+
+
+def verify_acceptance_sgml(
+    con: duckdb.DuckDBPyConnection, accession: str, sgml_text: str
+) -> datetime:
+    """Verify the acceptance clock from the SEC SGML header (New York time)."""
+    header = html.unescape(sgml_text)
+    identity = re.search(r"<ACCESSION-NUMBER>\s*([0-9-]+)", header)
+    if identity is None or identity.group(1) != accession:
+        raise ValueError("SGML accession identity does not match the requested filing")
+    match = re.search(r"<ACCEPTANCE-DATETIME>\s*(\d{14})", html.unescape(sgml_text))
+    if match is None:
+        raise ValueError("No SGML acceptance timestamp found")
+    accepted = (
+        datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
+        .replace(tzinfo=ZoneInfo("America/New_York"))
+        .astimezone(UTC)
+    )
+    con.execute(
+        "UPDATE filing SET accepted_at_utc=?,accepted_at_status='verified_sgml' WHERE accession_number=?",
+        [accepted, accession],
+    )
+    return accepted

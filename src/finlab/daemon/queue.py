@@ -205,6 +205,7 @@ def reclaim_stale(con: duckdb.DuckDBPyConnection, *, older_than: timedelta = STA
     cutoff = _now() - older_than
     rows = con.execute(
         "UPDATE job SET state = 'pending', locked_by = NULL, locked_at = NULL, "
+        "priority = 0, attempts = greatest(attempts - 1, 0), "
         "error = 'reclaimed after worker went away', updated_at = ? "
         "WHERE state = 'running' AND locked_at IS NOT NULL AND locked_at < ? "
         "RETURNING job_id",

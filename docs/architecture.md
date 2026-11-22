@@ -487,3 +487,56 @@ These processes do not open `finlab.duckdb` read-write. They follow the in-memor
 The Data Engine owns `write_conn()`, provider adapters, raw caches, staging, Parquet publication and the OS writer lock. Analytics owns read-only/in-memory DuckDB access and must not import SEC, Alpaca, Stooq or Yahoo adapters.
 
 A published warehouse epoch is represented by `data/warehouse/snapshots/{epoch}.json` plus `latest.json`. The contract includes `contract_version`, `schema_version`, publication time, required dataset presence and per-dataset checksums. Analytics validates this manifest before consuming a snapshot.
+
+## Publication contract v2 (verified implementation, 2026-11-21)
+
+This addendum supersedes the earlier manifest-only publication description.
+The engine publisher must run under the existing single-writer lock. It copies
+working datasets into a unique staging epoch, computes checksums on those
+copies, renames the completed epoch into `warehouse/snapshots/{epoch}/`, then
+atomically replaces `latest.json`. Published files are never updated by ingestion.
+Epoch identifiers include microseconds and a UUID, avoiding same-second collisions.
+
+The three warehouse-backed FastAPI routes validate contract version, required
+dataset status, epoch path and checksums, then attach all views to that epoch.
+A connection stays pinned across later publications. Missing, legacy v1 or corrupt
+publication returns HTTP 503; the frontend displays the error. Republish with
+`uv run finlab-engine publish` after upgrading. No database migration is needed.
+The API health route remains available without data.
+
+Engine derivations retain the existing working-dataset reader. This change does
+not migrate all legacy CLI/research consumers to pinned epochs; weekly research
+still requires a separate warehouse-only refactor. Publication validates integrity
+and presence, not financial completeness or semantic data quality. The caller
+must finish ingestion and native table exports before publication.
+
+Copies consume additional disk space per epoch; automatic retention and
+content-addressed deduplication are outstanding. Do not delete an epoch used by
+an active reader. Checksums currently require a full scan on each API request;
+this favors integrity over latency until a safe validation cache is implemented.
+The publisher handles process interruptions by leaving the old latest pointer
+usable; power-loss durability with explicit filesystem fsync is not implemented.
+
+The older cloud-inference and deployment descriptions are historical design
+material. Deterministic engine/API operation does not require an LLM. Backtest,
+signal and research-statistics modules remain stubs; portfolio intelligence is
+not implemented. Consult `technical_audit.md` before treating design sections as
+operational capabilities.
+
+### Incremental price recovery
+
+`finlab-engine sync-prices` and the daemon price handler share
+`ingest/price_sync.py`. Each security's latest persisted observation determines
+its next download start, minus `FINLAB_PRICE_CORRECTION_OVERLAP_DAYS` calendar
+days. A security without prices starts at `FINLAB_PRICE_HISTORY_START`. The
+planner groups equal windows and queries only aggregate watermarks in DuckDB.
+This recovers missing tails after outages longer than ten days without repeatedly
+requesting twenty years for already populated securities.
+
+Missing symbols fail the job so the durable queue can retry. Already merged rows
+remain and are deduplicated on retry. Corporate-action download happens before
+price persistence so that a failed action request does not advance the recovery
+anchor. This does not guarantee that a partially returned symbol has all expected
+sessions; session-gap checks and action persistence transactions are still open.
+The existing loader still rewrites full local history, even though downloads are
+incremental. Neither the command nor handler publishes an epoch automatically.

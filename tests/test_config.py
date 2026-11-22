@@ -83,3 +83,10 @@ def test_env_vars_are_read_with_the_finlab_prefix(
     cfg = Settings(_env_file=None)
     assert cfg.data_dir == (tmp_path / "elsewhere").resolve()
     assert cfg.sec_user_agent == "finlab jane@acme.com"
+
+
+def test_default_profile_is_major_us_and_remains_configurable(tmp_path, monkeypatch):
+    monkeypatch.delenv("FINLAB_UNIVERSE_PATH", raising=False)
+    settings = _settings(tmp_path)
+    assert settings.universe_path.name == "major_us_universe.yaml"
+    assert settings.universe_path.is_file()

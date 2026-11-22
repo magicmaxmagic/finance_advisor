@@ -1,0 +1,505 @@
+version: 1
+description: Curated current US research seed; not an index membership history
+identity_source: https://www.sec.gov/files/company_tickers.json
+identity_checked_on: '2026-11-21'
+companies:
+- cik: 320193
+  ticker: AAPL
+  sector: Information Technology
+  name: Apple Inc.
+  security_id: US:0000320193:AAPL
+- cik: 1551152
+  ticker: ABBV
+  sector: Health Care
+  name: AbbVie Inc.
+  security_id: US:0001551152:ABBV
+- cik: 1800
+  ticker: ABT
+  sector: Unclassified
+  name: ABBOTT LABORATORIES
+  security_id: US:0000001800:ABT
+- cik: 1467373
+  ticker: ACN
+  sector: Unclassified
+  name: Accenture plc
+  security_id: US:0001467373:ACN
+- cik: 796343
+  ticker: ADBE
+  sector: Information Technology
+  name: ADOBE INC.
+  security_id: US:0000796343:ADBE
+- cik: 6281
+  ticker: ADI
+  sector: Unclassified
+  name: ANALOG DEVICES INC
+  security_id: US:0000006281:ADI
+- cik: 8670
+  ticker: ADP
+  sector: Unclassified
+  name: AUTOMATIC DATA PROCESSING INC
+  security_id: US:0000008670:ADP
+- cik: 5272
+  ticker: AIG
+  sector: Unclassified
+  name: AMERICAN INTERNATIONAL GROUP, INC.
+  security_id: US:0000005272:AIG
+- cik: 6951
+  ticker: AMAT
+  sector: Unclassified
+  name: APPLIED MATERIALS INC /DE
+  security_id: US:0000006951:AMAT
+- cik: 2488
+  ticker: AMD
+  sector: Information Technology
+  name: ADVANCED MICRO DEVICES INC
+  security_id: US:0000002488:AMD
+- cik: 318154
+  ticker: AMGN
+  sector: Unclassified
+  name: AMGEN INC
+  security_id: US:0000318154:AMGN
+- cik: 1053507
+  ticker: AMT
+  sector: Real Estate
+  name: AMERICAN TOWER CORP /MA/
+  security_id: US:0001053507:AMT
+- cik: 1018724
+  ticker: AMZN
+  sector: Consumer Discretionary
+  name: AMAZON COM INC
+  security_id: US:0001018724:AMZN
+- cik: 1596532
+  ticker: ANET
+  sector: Unclassified
+  name: Arista Networks, Inc.
+  security_id: US:0001596532:ANET
+- cik: 2969
+  ticker: APD
+  sector: Unclassified
+  name: Air Products & Chemicals, Inc.
+  security_id: US:0000002969:APD
+- cik: 820313
+  ticker: APH
+  sector: Unclassified
+  name: AMPHENOL CORP /DE/
+  security_id: US:0000820313:APH
+- cik: 1730168
+  ticker: AVGO
+  sector: Information Technology
+  name: Broadcom Inc.
+  security_id: US:0001730168:AVGO
+- cik: 4962
+  ticker: AXP
+  sector: Unclassified
+  name: AMERICAN EXPRESS CO
+  security_id: US:0000004962:AXP
+- cik: 12927
+  ticker: BA
+  sector: Industrials
+  name: BOEING CO
+  security_id: US:0000012927:BA
+- cik: 70858
+  ticker: BAC
+  sector: Financials
+  name: BANK OF AMERICA CORP /DE/
+  security_id: US:0000070858:BAC
+- cik: 2012383
+  ticker: BLK
+  sector: Unclassified
+  name: BlackRock, Inc.
+  security_id: US:0002012383:BLK
+- cik: 14272
+  ticker: BMY
+  sector: Unclassified
+  name: BRISTOL MYERS SQUIBB CO
+  security_id: US:0000014272:BMY
+- cik: 1067983
+  ticker: BRK-B
+  sector: Financials
+  name: BERKSHIRE HATHAWAY INC
+  security_id: US:0001067983:BRK-B
+- cik: 885725
+  ticker: BSX
+  sector: Unclassified
+  name: BOSTON SCIENTIFIC CORP
+  security_id: US:0000885725:BSX
+- cik: 831001
+  ticker: C
+  sector: Unclassified
+  name: CITIGROUP INC
+  security_id: US:0000831001:C
+- cik: 18230
+  ticker: CAT
+  sector: Industrials
+  name: CATERPILLAR INC
+  security_id: US:0000018230:CAT
+- cik: 896159
+  ticker: CB
+  sector: Unclassified
+  name: Chubb Ltd
+  security_id: US:0000896159:CB
+- cik: 1051470
+  ticker: CCI
+  sector: Unclassified
+  name: CROWN CASTLE INC.
+  security_id: US:0001051470:CCI
+- cik: 813672
+  ticker: CDNS
+  sector: Unclassified
+  name: CADENCE DESIGN SYSTEMS INC
+  security_id: US:0000813672:CDNS
+- cik: 1739940
+  ticker: CI
+  sector: Unclassified
+  name: Cigna Group
+  security_id: US:0001739940:CI
+- cik: 21665
+  ticker: CL
+  sector: Unclassified
+  name: COLGATE PALMOLIVE CO
+  security_id: US:0000021665:CL
+- cik: 1166691
+  ticker: CMCSA
+  sector: Communication Services
+  name: COMCAST CORP
+  security_id: US:0001166691:CMCSA
+- cik: 1156375
+  ticker: CME
+  sector: Unclassified
+  name: CME GROUP INC.
+  security_id: US:0001156375:CME
+- cik: 1163165
+  ticker: COP
+  sector: Energy
+  name: CONOCOPHILLIPS
+  security_id: US:0001163165:COP
+- cik: 909832
+  ticker: COST
+  sector: Consumer Staples
+  name: COSTCO WHOLESALE CORP /NEW
+  security_id: US:0000909832:COST
+- cik: 1108524
+  ticker: CRM
+  sector: Information Technology
+  name: Salesforce, Inc.
+  security_id: US:0001108524:CRM
+- cik: 1535527
+  ticker: CRWD
+  sector: Unclassified
+  name: CrowdStrike Holdings, Inc.
+  security_id: US:0001535527:CRWD
+- cik: 858877
+  ticker: CSCO
+  sector: Information Technology
+  name: CISCO SYSTEMS, INC.
+  security_id: US:0000858877:CSCO
+- cik: 93410
+  ticker: CVX
+  sector: Energy
+  name: CHEVRON CORP
+  security_id: US:0000093410:CVX
+- cik: 715957
+  ticker: D
+  sector: Unclassified
+  name: DOMINION ENERGY, INC
+  security_id: US:0000715957:D
+- cik: 1666700
+  ticker: DD
+  sector: Unclassified
+  name: DuPont de Nemours, Inc.
+  security_id: US:0001666700:DD
+- cik: 315189
+  ticker: DE
+  sector: Unclassified
+  name: DEERE & CO
+  security_id: US:0000315189:DE
+- cik: 313616
+  ticker: DHR
+  sector: Unclassified
+  name: DANAHER CORP /DE/
+  security_id: US:0000313616:DHR
+- cik: 1744489
+  ticker: DIS
+  sector: Communication Services
+  name: Walt Disney Co
+  security_id: US:0001744489:DIS
+- cik: 1326160
+  ticker: DUK
+  sector: Utilities
+  name: Duke Energy CORP
+  security_id: US:0001326160:DUK
+- cik: 1156039
+  ticker: ELV
+  sector: Unclassified
+  name: Elevance Health, Inc.
+  security_id: US:0001156039:ELV
+- cik: 32604
+  ticker: EMR
+  sector: Unclassified
+  name: EMERSON ELECTRIC CO
+  security_id: US:0000032604:EMR
+- cik: 1551182
+  ticker: ETN
+  sector: Unclassified
+  name: Eaton Corp plc
+  security_id: US:0001551182:ETN
+- cik: 831259
+  ticker: FCX
+  sector: Materials
+  name: FREEPORT-MCMORAN INC
+  security_id: US:0000831259:FCX
+- cik: 1048911
+  ticker: FDX
+  sector: Unclassified
+  name: FEDEX CORP
+  security_id: US:0001048911:FDX
+- cik: 1136893
+  ticker: FIS
+  sector: Unclassified
+  name: Fidelity National Information Services, Inc.
+  security_id: US:0001136893:FIS
+- cik: 40533
+  ticker: GD
+  sector: Unclassified
+  name: GENERAL DYNAMICS CORP
+  security_id: US:0000040533:GD
+- cik: 40545
+  ticker: GE
+  sector: Industrials
+  name: GENERAL ELECTRIC CO
+  security_id: US:0000040545:GE
+- cik: 882095
+  ticker: GILD
+  sector: Unclassified
+  name: GILEAD SCIENCES, INC.
+  security_id: US:0000882095:GILD
+- cik: 1467858
+  ticker: GM
+  sector: Unclassified
+  name: General Motors Co
+  security_id: US:0001467858:GM
+- cik: 1652044
+  ticker: GOOGL
+  sector: Communication Services
+  name: Alphabet Inc.
+  security_id: US:0001652044:GOOGL
+- cik: 1123360
+  ticker: GPN
+  sector: Unclassified
+  name: GLOBAL PAYMENTS INC
+  security_id: US:0001123360:GPN
+- cik: 886982
+  ticker: GS
+  sector: Financials
+  name: GOLDMAN SACHS GROUP INC
+  security_id: US:0000886982:GS
+- cik: 354950
+  ticker: HD
+  sector: Consumer Discretionary
+  name: HOME DEPOT, INC.
+  security_id: US:0000354950:HD
+- cik: 773840
+  ticker: HON
+  sector: Industrials
+  name: HONEYWELL INTERNATIONAL INC
+  security_id: US:0000773840:HON
+- cik: 51143
+  ticker: IBM
+  sector: Unclassified
+  name: INTERNATIONAL BUSINESS MACHINES CORP
+  security_id: US:0000051143:IBM
+- cik: 1571949
+  ticker: ICE
+  sector: Unclassified
+  name: Intercontinental Exchange, Inc.
+  security_id: US:0001571949:ICE
+- cik: 50863
+  ticker: INTC
+  sector: Unclassified
+  name: INTEL CORP
+  security_id: US:0000050863:INTC
+- cik: 896878
+  ticker: INTU
+  sector: Unclassified
+  name: INTUIT INC.
+  security_id: US:0000896878:INTU
+- cik: 1035267
+  ticker: ISRG
+  sector: Unclassified
+  name: INTUITIVE SURGICAL INC
+  security_id: US:0001035267:ISRG
+- cik: 49826
+  ticker: ITW
+  sector: Unclassified
+  name: ILLINOIS TOOL WORKS INC
+  security_id: US:0000049826:ITW
+- cik: 200406
+  ticker: JNJ
+  sector: Health Care
+  name: JOHNSON & JOHNSON
+  security_id: US:0000200406:JNJ
+- cik: 19617
+  ticker: JPM
+  sector: Financials
+  name: JPMORGAN CHASE & CO
+  security_id: US:0000019617:JPM
+- cik: 1404912
+  ticker: KKR
+  sector: Unclassified
+  name: KKR & Co. Inc.
+  security_id: US:0001404912:KKR
+- cik: 319201
+  ticker: KLAC
+  sector: Unclassified
+  name: KLA CORP
+  security_id: US:0000319201:KLAC
+- cik: 21344
+  ticker: KO
+  sector: Consumer Staples
+  name: COCA COLA CO
+  security_id: US:0000021344:KO
+- cik: 1707925
+  ticker: LIN
+  sector: Materials
+  name: LINDE PLC
+  security_id: US:0001707925:LIN
+- cik: 59478
+  ticker: LLY
+  sector: Health Care
+  name: ELI LILLY & Co
+  security_id: US:0000059478:LLY
+- cik: 936468
+  ticker: LMT
+  sector: Industrials
+  name: LOCKHEED MARTIN CORP
+  security_id: US:0000936468:LMT
+- cik: 60667
+  ticker: LOW
+  sector: Unclassified
+  name: LOWES COMPANIES INC
+  security_id: US:0000060667:LOW
+- cik: 1141391
+  ticker: MA
+  sector: Financials
+  name: Mastercard Inc
+  security_id: US:0001141391:MA
+- cik: 1048286
+  ticker: MAR
+  sector: Unclassified
+  name: MARRIOTT INTERNATIONAL INC /MD/
+  security_id: US:0001048286:MAR
+- cik: 63908
+  ticker: MCD
+  sector: Consumer Discretionary
+  name: MCDONALDS CORP
+  security_id: US:0000063908:MCD
+- cik: 1059556
+  ticker: MCO
+  sector: Unclassified
+  name: MOODYS CORP /DE/
+  security_id: US:0001059556:MCO
+- cik: 1326801
+  ticker: META
+  sector: Communication Services
+  name: Meta Platforms, Inc.
+  security_id: US:0001326801:META
+- cik: 310158
+  ticker: MRK
+  sector: Health Care
+  name: Merck & Co., Inc.
+  security_id: US:0000310158:MRK
+- cik: 789019
+  ticker: MSFT
+  sector: Information Technology
+  name: MICROSOFT CORP
+  security_id: US:0000789019:MSFT
+- cik: 753308
+  ticker: NEE
+  sector: Utilities
+  name: NEXTERA ENERGY INC
+  security_id: US:0000753308:NEE
+- cik: 1065280
+  ticker: NFLX
+  sector: Communication Services
+  name: NETFLIX INC
+  security_id: US:0001065280:NFLX
+- cik: 320187
+  ticker: NKE
+  sector: Consumer Discretionary
+  name: NIKE, Inc.
+  security_id: US:0000320187:NKE
+- cik: 1045810
+  ticker: NVDA
+  sector: Information Technology
+  name: NVIDIA CORP
+  security_id: US:0001045810:NVDA
+- cik: 1341439
+  ticker: ORCL
+  sector: Information Technology
+  name: ORACLE CORP
+  security_id: US:0001341439:ORCL
+- cik: 77476
+  ticker: PEP
+  sector: Consumer Staples
+  name: PEPSICO INC
+  security_id: US:0000077476:PEP
+- cik: 78003
+  ticker: PFE
+  sector: Health Care
+  name: PFIZER INC
+  security_id: US:0000078003:PFE
+- cik: 80424
+  ticker: PG
+  sector: Consumer Staples
+  name: PROCTER & GAMBLE Co
+  security_id: US:0000080424:PG
+- cik: 1045609
+  ticker: PLD
+  sector: Real Estate
+  name: Prologis, Inc.
+  security_id: US:0001045609:PLD
+- cik: 89800
+  ticker: SHW
+  sector: Materials
+  name: SHERWIN WILLIAMS CO
+  security_id: US:0000089800:SHW
+- cik: 97745
+  ticker: TMO
+  sector: Health Care
+  name: THERMO FISHER SCIENTIFIC INC.
+  security_id: US:0000097745:TMO
+- cik: 1318605
+  ticker: TSLA
+  sector: Consumer Discretionary
+  name: Tesla, Inc.
+  security_id: US:0001318605:TSLA
+- cik: 731766
+  ticker: UNH
+  sector: Health Care
+  name: UNITEDHEALTH GROUP INC
+  security_id: US:0000731766:UNH
+- cik: 100885
+  ticker: UNP
+  sector: Industrials
+  name: UNION PACIFIC CORP
+  security_id: US:0000100885:UNP
+- cik: 1403161
+  ticker: V
+  sector: Financials
+  name: VISA INC.
+  security_id: US:0001403161:V
+- cik: 72971
+  ticker: WFC
+  sector: Financials
+  name: WELLS FARGO & COMPANY/MN
+  security_id: US:0000072971:WFC
+- cik: 104169
+  ticker: WMT
+  sector: Consumer Staples
+  name: Walmart Inc.
+  security_id: US:0000104169:WMT
+- cik: 2115436
+  ticker: XOM
+  sector: Energy
+  name: ExxonMobil Holdings Corp
+  security_id: US:0002115436:XOM

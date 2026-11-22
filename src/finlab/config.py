@@ -7,7 +7,9 @@ is a one-line change.
 
 from __future__ import annotations
 
+import math
 import re
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -36,6 +38,16 @@ class Settings(BaseSettings):
 
     # --- paths ---------------------------------------------------------------
     data_dir: Path = Path("./data")
+    universe_path: Path | None = Path(__file__).resolve().parent / "data/major_us_universe.yaml"
+    factor_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "value": 0.2,
+            "quality": 0.2,
+            "growth": 0.2,
+            "momentum": 0.2,
+            "risk": 0.2,
+        }
+    )
 
     # --- SEC -----------------------------------------------------------------
     sec_user_agent: str = f"finlab {PLACEHOLDER_USER_AGENT_DOMAIN}"
@@ -43,6 +55,10 @@ class Settings(BaseSettings):
     # raise it past the limit by editing a config file.
     sec_max_rps: float = Field(default=10.0, gt=0, le=10.0)
     sec_max_concurrency: int = Field(default=8, ge=1, le=16)
+
+    # Incremental Yahoo recovery; overlap is calendar days, not trading sessions.
+    price_history_start: date = date(2006, 1, 1)
+    price_correction_overlap_days: int = Field(default=10, ge=1, le=365)
 
     # --- market data (IEX, read-only requests) ------------------------------
     alpaca_key_id: SecretStr | None = None
@@ -64,6 +80,19 @@ class Settings(BaseSettings):
     # --- logging -------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "console"] = "console"
+
+    @field_validator("factor_weights")
+    @classmethod
+    def _validate_factor_weights(cls, weights):
+        if (
+            set(weights) != {"value", "quality", "growth", "momentum", "risk"}
+            or any(not math.isfinite(w) or w < 0 for w in weights.values())
+            or abs(sum(weights.values()) - 1) > 1e-9
+        ):
+            raise ValueError(
+                "Provide finite nonnegative weights for all five families summing to one"
+            )
+        return weights
 
     @field_validator("duckdb_memory_limit")
     @classmethod

@@ -43,6 +43,9 @@ WAREHOUSE_DATASETS: tuple[str, ...] = (
     "metric",
     "fundamentals_q4",
     "universe_snapshot",
+    "corporate_action",
+    "price_ingestion",
+    "ticker_history",
 )
 
 
@@ -61,6 +64,7 @@ def sql_literal(value: str) -> str:
 
 
 def _apply_pragmas(con: duckdb.DuckDBPyConnection, settings: Settings) -> None:
+    con.execute("SET TimeZone = 'UTC'")
     con.execute(f"SET memory_limit={sql_literal(settings.duckdb_memory_limit)}")
     con.execute(f"SET threads={settings.duckdb_threads:d}")
 
@@ -110,6 +114,7 @@ def write_conn(settings: Settings | None = None) -> Iterator[duckdb.DuckDBPyConn
     cfg = settings or get_settings()
     cfg.db_dir.mkdir(parents=True, exist_ok=True)
     with _writer_lock(Path(f"{cfg.db_path}.lock")):
+        recover_working_directories(cfg.warehouse_dir)
         con = duckdb.connect(str(cfg.db_path))
         try:
             _apply_pragmas(con, cfg)
@@ -118,8 +123,35 @@ def write_conn(settings: Settings | None = None) -> Iterator[duckdb.DuckDBPyConn
             con.close()
 
 
+def recover_working_directories(warehouse_dir: Path) -> None:
+    """Restore a dataset interrupted between renames, under the writer lock.
+
+    A present destination is already committed. Leave obsolete backups alone:
+    readers exclude hidden paths and recovery must never guess at deleting data.
+    """
+    for dataset in WAREHOUSE_DATASETS:
+        destination = warehouse_dir / dataset
+        if destination.exists():
+            continue
+        backups = [p for p in warehouse_dir.glob(f".trash-{dataset}-*") if p.is_dir()]
+        if backups:
+            max(backups, key=lambda p: p.stat().st_mtime_ns).replace(destination)
+
+
+def parquet_files(root: Path) -> list[Path]:
+    """Committed files only; interrupted publication trash is never a dataset."""
+    return sorted(
+        path
+        for path in root.rglob("*.parquet")
+        if not any(part.startswith(".") for part in path.relative_to(root).parts)
+    )
+
+
 def attach_warehouse_views(
-    con: duckdb.DuckDBPyConnection, settings: Settings | None = None
+    con: duckdb.DuckDBPyConnection,
+    settings: Settings | None = None,
+    *,
+    warehouse_dir: Path | None = None,
 ) -> list[str]:
     """Expose the Parquet warehouse as views. Returns the names actually attached.
 
@@ -129,16 +161,17 @@ def attach_warehouse_views(
     cfg = settings or get_settings()
     attached: list[str] = []
     for dataset in WAREHOUSE_DATASETS:
-        root = cfg.warehouse_dir / dataset
-        if not root.is_dir() or not any(root.rglob("*.parquet")):
+        root = (warehouse_dir or cfg.warehouse_dir) / dataset
+        files = parquet_files(root)
+        if not root.is_dir() or not files:
             continue
         # Hive columns are reconstructed from `key=value` directories; a flat
         # snapshot has none, and asking for them there is a needless mismatch.
         hive = any(child.is_dir() and "=" in child.name for child in root.iterdir())
-        glob = sql_literal(f"{root}/**/*.parquet")
+        glob = "[" + ", ".join(sql_literal(str(path)) for path in files) + "]"
         con.execute(
             f"CREATE OR REPLACE VIEW {dataset} AS "
-            f"SELECT * FROM read_parquet({glob}, hive_partitioning = {str(hive).lower()})"
+            f"SELECT * FROM read_parquet({glob}, hive_partitioning = {str(hive).lower()}, union_by_name = true)"
         )
         attached.append(dataset)
     return attached
