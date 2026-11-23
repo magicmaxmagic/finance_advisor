@@ -3,6 +3,7 @@
 import hashlib
 import json
 from bisect import bisect_left
+from collections import defaultdict
 from datetime import timedelta
 from itertools import combinations, pairwise
 from math import isfinite
@@ -18,6 +19,12 @@ from finlab.analytics.rankings import historical_rankings
 from finlab.analytics.snapshot import attached_views, published_read_conn, require_valid_snapshot
 from finlab.ingest.universe import load_poc_universe
 from finlab.research.decision_evidence import decision_flags, decision_outcomes, summarize_decisions
+from finlab.research.protocol_v8 import (
+    ABLATIONS,
+    EXTRA_FACTORS,
+    EXTRA_MARKET,
+    additional_observations,
+)
 from finlab.research.score_validation import (
     HORIZONS,
     daily_buy_and_hold,
@@ -283,10 +290,14 @@ def _collect(
     rolling,
     test_start=None,
     baseline_folds=None,
+    expanded=False,
 ):
     epoch, spy, sessions, panel = forward_price_panel(start, end, epoch)
     boundary = bisect_left(sessions, test_start) if test_start else None
     factor_directions = HOLDOUT_FACTORS if test_start else FACTORS
+    if expanded:
+        factor_directions = {**factor_directions, **EXTRA_FACTORS}
+    historical_valuation = defaultdict(list)
     with published_read_conn(epoch=epoch) as con:
         metadata = {
             sid: (delisting, reason)
@@ -329,6 +340,7 @@ def _collect(
         eligible = {r["security_id"]: r for r in cohort if r["eligible"]}
         oriented = {name: {} for name in factor_directions}
         dimensions, raw_values = {}, {}
+        ablations = {name: {} for name in ABLATIONS} if expanded else {}
         flags = {}
         legacy_scores = {
             row["security_id"]: row["score"] for row in legacy["rows"] if row["score"] is not None
@@ -336,6 +348,8 @@ def _collect(
         for sid, row in eligible.items():
             raw = values(row)
             raw["eps_growth"] = eps_growth(row)
+            if expanded:
+                raw.update(additional_observations(row, raw, historical_valuation[sid], date))
             raw_values[sid] = raw
             assessment = assess(row, cohort)
             if boundary is not None and row["market_ready"]:
@@ -354,9 +368,13 @@ def _collect(
                 and sid in legacy_scores
             ):
                 dimensions[sid] = scores
+                for name in ablations:
+                    ablations[name][sid] = assessment["score_groups"]["fundamental"][
+                        ABLATIONS[name]
+                    ]
             for key, direction in factor_directions.items():
                 value = raw.get(key)
-                market = key in MARKET_FACTORS
+                market = key in MARKET_FACTORS or (expanded and key in EXTRA_MARKET)
                 if value is not None and isfinite(value) and (not market or row["market_ready"]):
                     oriented[key][sid] = direction * value
         models = {
@@ -367,6 +385,7 @@ def _collect(
             for model, weights in MIXES.items()
         }
         models["legacy"] = {sid: legacy_scores[sid] for sid in dimensions}
+        models.update(ablations)
         floor = float(np.quantile([x[2] for x in dimensions.values()], 0.2)) if dimensions else 0
         models["risk_constraint"] = {
             sid: score[0] for sid, score in dimensions.items() if score[2] >= floor
@@ -530,6 +549,7 @@ def _collect(
         "equal_weight",
         "spy",
         "adaptive_oos",
+        *(ABLATIONS if expanded else ()),
     )
     for h, rows in folds.items():
         summary[str(h)] = dict(
@@ -599,6 +619,7 @@ def run_v3(
     rolling=False,
     test_start=None,
     baseline_report=None,
+    expanded=False,
 ):
     if (
         not isfinite(cost_bps)
@@ -607,6 +628,7 @@ def run_v3(
         or min(stride, train, validation) < 1
         or embargo < 0
         or (test_start is not None and not start < test_start < end)
+        or (expanded and not test_start)
     ):
         raise ValueError("Invalid V3 dates or study parameters")
     cfg = config.get_settings()
@@ -666,6 +688,17 @@ def run_v3(
             "The risk constraint removes the lowest resilience quintile before ranking. The entry filter requires a close above SMA200. Both screen an eligible seed and can change concentration.",
         ],
     )
+    if expanded:
+        prefix = "validation-v8"
+        metadata["version"] = "signal-research-v8.0"
+        metadata["factor_directions"] = {**HOLDOUT_FACTORS, **EXTRA_FACTORS}
+        metadata["study_protocol"] = {
+            "firm_history": "TTM P/E midrank versus at least eight strictly earlier signal dates within five years.",
+            "macd_to_price": "Observed MACD divided by its same-cutoff price.",
+            "ebitda_growth": "Two aligned annual operating-income plus D&A pairs within each accession; prior EBITDA must be positive.",
+            "ablations": ABLATIONS,
+            "promotion_status": "experimental",
+        }
     if baseline is not None:
         metadata["baseline"] = {
             "sha256": hashlib.sha256(baseline_bytes).hexdigest(),
@@ -688,6 +721,7 @@ def run_v3(
             rolling=rolling,
             test_start=test_start,
             baseline_folds=baseline["folds"] if baseline is not None else None,
+            expanded=expanded,
         )
         archive_sources(directory, source_hash)
         report = {**result, **metadata}

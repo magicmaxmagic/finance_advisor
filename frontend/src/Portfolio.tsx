@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FinancialChart } from './DeferredChart'
 import type { Point } from './FinancialChart'
 import { cash, pct } from './format'
-import { type Currency, type Ledger, type Trade, loadLedger, parseTrades, saveLedger, serializeTrades, validateTrade } from './portfolioLedger'
+import { type Currency, type Ledger, type Trade, loadLedger, parseTrades, serverLedger, serializeTrades, validateTrade } from './portfolioLedger'
 import { PortfolioPanel as AdvancedCalculator } from './ResearchTools'
 
 type Position = { security_id: string; quantity: number; market_value: number; cost_basis: number; unrealized_pnl: number; price_date: string; weight: number }
@@ -30,11 +30,11 @@ async function analyze(ledger: Ledger, date: string, fx: string, options: { sign
 }
 
 export function Portfolio({ companies, initialTicker, latest }: { companies: Directory; initialTicker: string; latest: string }) {
-  const [initial] = useState(() => {
-    try { return { ledger:loadLedger(), error:'' } }
-    catch (reason) { return { ledger:{base:'USD',trades:[]} as Ledger, error:failure(reason) } }
-  })
-  const [ledger, setLedger] = useState(initial.ledger)
+  const [ledger, setLedger] = useState<Ledger>({ base:'USD', trades:[] })
+  const [revision, setRevision] = useState<number | null>(null)
+  const [request, setRequest] = useState(0)
+  const [loadError, setLoadError] = useState('')
+  const [legacyBackup, setLegacyBackup] = useState<Ledger>()
   const [draft, setDraft] = useState<Draft>(() => freshDraft(initialTicker,latest))
   const [edit, setEdit] = useState<string | null>(null)
   const [remove, setRemove] = useState<Trade | null>(null)
@@ -43,7 +43,7 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
   const [fx, setFx] = useState('')
   const [result, setResult] = useState<{ key: string; value?: Analysis; error?: string }>()
   const [message, setMessage] = useState('')
-  const [error, setError] = useState(initial.error)
+  const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [scenario, setScenario] = useState(initialTicker)
   const [amount, setAmount] = useState('')
@@ -56,6 +56,31 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
   const valued = result?.key === key ? result : undefined
   const position = valued?.value?.result
   const portfolio = position && !('after' in position) ? position : undefined
+  useEffect(() => {
+    const controller = new AbortController()
+    async function load() {
+      let stored = await serverLedger(controller.signal)
+      let legacy: Ledger | undefined
+      try { legacy = loadLedger() }
+      catch (reason) { if (!controller.signal.aborted) setMessage(`Browser backup needs attention. ${failure(reason)}`) }
+      if (legacy && stored.revision === 0 && (legacy.trades.length || legacy.base !== 'USD')) {
+        try {
+          stored = await serverLedger(controller.signal, { expected_revision:0, ledger:legacy })
+          if (!controller.signal.aborted) setMessage('Browser transactions copied to the local portfolio store.')
+        } catch (reason) {
+          if (controller.signal.aborted) return
+          stored = await serverLedger(controller.signal)
+          if (stored.revision === 0) throw reason
+        }
+      }
+      if (!controller.signal.aborted) {
+        setRevision(stored.revision); setLedger(stored.ledger)
+        if (legacy?.trades.length && JSON.stringify(legacy) !== JSON.stringify(stored.ledger)) setLegacyBackup(legacy)
+      }
+    }
+    load().catch(reason => { if (!controller.signal.aborted) setLoadError(failure(reason)) })
+    return () => controller.abort()
+  }, [request])
 
   useEffect(() => {
     if (!date || !trades.length) return
@@ -69,16 +94,13 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
 
   function update(field: keyof Draft, value: string) { setDraft(current => ({ ...current, [field]:value })) }
   async function commit(next: Ledger, description: string) {
-    if (initial.error) throw Error('The saved ledger could not be read, so changes are blocked to protect it.')
+    if (revision === null) throw Error('Load the saved portfolio before making changes.')
     if (next.trades.some(trade => trade.side === 'sell')) {
       const cutoff = next.trades.reduce((max,trade) => trade.date > max ? trade.date : max, date)
       await analyze(next,cutoff,fx)
     }
-    if (JSON.stringify(loadLedger()) !== JSON.stringify(ledger)) {
-      throw Error('This portfolio changed in another tab. Reload before making another edit.')
-    }
-    saveLedger(next)
-    setLedger(next); setMessage(description); setScenarioResult(undefined)
+    const stored = await serverLedger(undefined, { expected_revision:revision, ledger:next })
+    setLedger(stored.ledger); setRevision(stored.revision); setMessage(description); setScenarioResult(undefined)
   }
   async function save(event: React.FormEvent) {
     event.preventDefault()
@@ -154,11 +176,12 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
 
   return <>
     <section className="panel">
-      <div className="section-heading"><div><h2>Portfolio overview</h2><p>Transactions are stored in this browser. Valuation uses the local published warehouse.</p></div>
+      <div className="section-heading"><div><h2>Portfolio overview</h2><p>Transactions are stored in a separate database on this device. Valuation uses the local published warehouse.</p></div>
         <label className="date-control">Valuation date<input type="date" max={latest} value={date} onChange={event => {
           setAsOf(event.target.value); setScenarioResult(undefined)
         }} /></label></div>
-      <div className="toolbar"><label>Portfolio currency<select value={ledger.base} disabled={ledger.trades.length > 0}
+      {revision === null && (loadError ? <p role="alert">{loadError} <button type="button" onClick={() => { setLoadError(''); setRequest(request + 1) }}>Reload portfolio</button></p> : <p role="status">Loading the local portfolio…</p>)}
+      <div className="toolbar"><label>Portfolio currency<select value={ledger.base} disabled={revision === null || ledger.trades.length > 0}
         onChange={event => {
           const next = { ...ledger,base:event.target.value as Currency }
           void commit(next,'Portfolio currency saved.').catch(reason => setError(failure(reason)))
@@ -167,7 +190,7 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
         {trades.some(trade => trade.currency !== ledger.base) && <label>Valuation FX (portfolio currency per foreign unit)
           <input value={fx} type="number" min="0.000001" step="any" onChange={event => { setFx(event.target.value); setScenarioResult(undefined) }}/></label>}
       </div>
-      {!trades.length && <p>No transactions at this valuation date. Record a buy below to get started.</p>}
+      {revision !== null && !trades.length && <p>No transactions at this valuation date. Record a buy below to get started.</p>}
       {!!trades.length && !valued && <p role="status">Valuing positions against published closes…</p>}
       {valued?.error && <p role="alert" className="warning">Valuation unavailable. {valued.error}</p>}
       {portfolio && <div className="status-grid portfolio-totals">
@@ -211,7 +234,7 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
         <label>Fees (optional)<input type="number" min="0" step="any" value={draft.fee} onChange={event => update('fee',event.target.value)}/></label>
         {draft.currency !== ledger.base && <label>Trade FX (portfolio currency per trade unit)<input type="number" min="0.000001" step="any" required
           value={draft.rate} onChange={event => update('rate',event.target.value)}/></label>}
-        <button className="primary" disabled={busy || !latest} type="submit">{busy ? 'Working…' : 'Save transaction'}</button>
+        <button className="primary" disabled={revision === null || busy || !latest} type="submit">{busy ? 'Working…' : 'Save transaction'}</button>
         {edit && <button type="button" onClick={() => { setEdit(null); setDraft(freshDraft(initialTicker,date)) }}>Cancel edit</button>}
       </form>
       {error && <p role="alert" className="error">{error}</p>}
@@ -243,9 +266,13 @@ export function Portfolio({ companies, initialTicker, latest }: { companies: Dir
     </section>}
     <details className="panel"><summary>CSV import and advanced calculator</summary>
       <p>Columns: date, ticker, side, quantity, price, currency, fees, exchange_rate. Append an explicit rate for foreign-currency trades.</p>
-      <label className="field">Import transaction CSV<input type="file" accept=".csv,text/csv" disabled={busy || !latest}
+      <label className="field">Import transaction CSV<input type="file" accept=".csv,text/csv" disabled={revision === null || busy || !latest}
         onChange={event => { const file = event.target.files?.[0]; if (file) void importCsv(file); event.target.value='' }} /></label>
-      {ledger.trades.length > 0 && <details><summary>Copy ledger CSV</summary><textarea readOnly value={serializeTrades(ledger.trades)} rows={5} /></details>}
+      {ledger.trades.length > 0 && <details><summary>Export ledger CSV</summary>
+        <a download="finlab-portfolio.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(serializeTrades(ledger.trades))}`}>Download portfolio CSV</a>
+        <textarea readOnly value={serializeTrades(ledger.trades)} rows={5} /></details>}
+      {legacyBackup && <details><summary>Browser backup</summary><p>Some browser records differ from the saved portfolio. Review them before importing.</p>
+        <textarea readOnly value={serializeTrades(legacyBackup.trades)} rows={5} /></details>}
       <details><summary>Open legacy CSV calculator</summary><AdvancedCalculator /></details>
     </details>
   </>

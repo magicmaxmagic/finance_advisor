@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { DecisionResearch, type DecisionContext } from './DecisionResearch'
 import { FinancialChart } from './DeferredChart'
 import { pct } from './format'
 import { financialGlossary } from './financialGlossary'
@@ -52,12 +53,16 @@ export type Assessment = {
     filed_date: string; value: number | null; reason?: string; source_url: string; accession_number: string
   }[] | null
   decision_research?: Record<string, {rule: string; observed: boolean | null}>
+  decision_context?: DecisionContext
   comparisons: Record<string, Comparison>
   financial_context?: {
     history: Record<string,{ observations:number; minimum:number|null; maximum:number|null; median_relation:string; recent_change:number|null; recent_four_minus_earlier_four:number|null }>
     market: { status:string; benchmark?:string; trend?:string; price_return_12m?:number; realized_volatility_60?:number; drawdown_from_252_session_high?:number; observation_date?:string }
     peers: { status:string; comparisons:Record<string,{ cohort:string; label:string; count:number; median:number; percentile:number }> }
     predictive_evidence: { status:string; end?:string; factors:Record<string,{ ic:number|null; interval:number[]|null; observations:number|null; holm_p:number|null }> }
+    sentiment?: { status: string; version: string; limitation: string; attention_30d: number; prior_attention_30d: number;
+      balance_change: number | null; documents: { title: string; source: string; source_url: string; available_on: string; tone: string;
+        intensity: number | null; matched_terms: string[]; document_version: string; document_sha256: string }[] }
     events: { kind:string; label:string; source:string|null; event_date:string; timing:string; publication_timestamp:string|null; evidence?:string|null; source_url?:string|null; split_factor?:number|null; amount_per_share?:number|null; limitation:string }[]
     limitations:string[]
   }
@@ -132,7 +137,7 @@ function formatIndicator(key: string, value: number | null) {
   return number(value)
 }
 
-const views = ['Valuation', 'Business quality', 'Technical', 'Risks', 'Score breakdown', 'Market & events'] as const
+const views = ['Valuation', 'Business quality', 'Technical', 'Risks', 'Score breakdown', 'Decision research', 'Market & events'] as const
 type View = typeof views[number]
 type Metric = { value: number | null; status: string; definition: string; date: string | null; source: string; diagnostic?: Diagnostic | null }
 const marketRisk = ['annualized_volatility','max_drawdown','downside_volatility','beta','var_95','cvar_95','sharpe','sortino']
@@ -216,13 +221,14 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
   }).sort((a,b) => a.date.localeCompare(b.date))
   const trend = history === 'fcf' ? fcf : sourceHistory
 
-  return <section className="panel v4-evidence">
+  return <section className="panel v4-evidence" id="company-research-details" tabIndex={-1}>
     <div className="section-heading"><div><h2>Research details</h2><p>Choose a topic, then open any metric to see its evidence.</p></div>
       <div className="segments" aria-label="Evidence view"><button type="button" aria-pressed={!quant} onClick={() => changeMode(false)}>Simple</button>
         <button type="button" aria-pressed={quant} onClick={() => changeMode(true)}>Quant</button></div></div>
     <div className="topic-nav" aria-label="Research topic">{views.map(topic => <button type="button" key={topic} aria-pressed={view === topic}
       onClick={() => { setView(topic); setAll(false) }}>{topic}</button>)}</div>
     {quant && <p className="epoch-value">{score.model_version}{score.input_version && ` · ${score.input_version}`} · {score.normalization} {score.weight_status}</p>}
+    {view === 'Decision research' && (data.decision_context ? <DecisionResearch data={data.decision_context} quant={quant} /> : <p>Decision research is unavailable for this assessment.</p>)}
     {view === 'Valuation' && <div className="v4-context"><strong>Valuation in context</strong><p>{historicalValuation}</p></div>}
     {view === 'Valuation' && data.share_class_evidence?.length ? <details className="v4-context">
       <summary>Why · Share-class evidence</summary>
@@ -255,7 +261,16 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
         {' '}· 60-session annualized volatility {pct(context.market.realized_volatility_60)}
         {' '}· Distance from 252-session high {pct(context.market.drawdown_from_252_session_high)} · {context.market.observation_date}.</p>
         : <p>Comparable market observations are unavailable at this cutoff.</p>}
-      <p>Release-vintage macro data and timestamped sentiment are unavailable in the local publication.</p>
+      <h3>Sentiment and catalysts</h3>
+      {context?.sentiment?.status === 'available' ? <>
+        <p>{context.sentiment.attention_30d} published {context.sentiment.attention_30d === 1 ? 'release' : 'releases'} in 30 days · {context.sentiment.prior_attention_30d} in the previous 30 days.</p>
+        {context.sentiment.balance_change != null && <p>Change in lexical balance {pct(context.sentiment.balance_change)}.</p>}
+        <ul>{context.sentiment.documents.map(item => <li key={item.document_sha256}><a href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a>
+          {' · '}{item.available_on} · {item.tone === 'insufficient' ? 'Not enough recognized language to classify' : `${item.tone} tone`}
+          {quant && <p>{item.source} · {item.document_version} · {context.sentiment?.version}
+            {item.intensity != null && ` · intensity ${pct(item.intensity)}`} · {item.matched_terms.join(', ') || 'No matched terms'}</p>}</li>)}</ul>
+        <p>{context.sentiment.limitation}</p>
+      </> : <p>No source-backed earnings text is available for this company by the selected cutoff.</p>}
       <h3>Recorded company events</h3>
       {context?.events.length ? <><ul>{context.events.slice(0, allEvents ? undefined : 5).map((event,index) => <li key={`${event.event_date}-${index}`}>
         <strong>{event.label}</strong> · {event.event_date} · {event.source ?? 'Source missing'} · {event.timing.replaceAll('_',' ')}
@@ -288,7 +303,7 @@ export function CompanyAssessment({ data }: { data: Assessment }) {
         </div>)}
       </article>)}
       <p>FinLab’s default weights are 60% fundamentals, 25% technical and 15% resilience. The weights are configurable and remain unvalidated.</p>
-    </div> : <>
+    </div> : view === 'Decision research' ? null : <>
       <div className="v4-metric-grid">
         {[...new Set(all ? [...(focusMetrics[view] ?? []), ...keys] : focusMetrics[view] ?? keys)].filter(key => metrics[key]).map(key =>
           <button key={key} type="button" className="v4-metric" aria-label={`Explain ${label(key)}`} onClick={() => select(key)}>

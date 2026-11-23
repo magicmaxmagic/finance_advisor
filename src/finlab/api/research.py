@@ -1,24 +1,48 @@
 """Local research requests; derived results may be persisted separately."""
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from finlab.analytics.portfolio_ledger import LedgerUpdate
 
 router = APIRouter(prefix="/api")
 
 
+@router.get("/analytics/calendar")
+def calendar(
+    start: date,
+    end: date,
+    as_of: date | None = None,
+    ticker: Annotated[list[str] | None, Query()] = None,
+    kind: Literal[
+        "earnings_release",
+        "earnings_call",
+        "sec_filing",
+        "investor_event",
+        "dividend",
+        "corporate_action",
+    ]
+    | None = None,
+):
+    from finlab.analytics.event_calendar import event_calendar
+
+    try:
+        return event_calendar(start, end, as_of or date.today(), ticker or (), kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/analytics/model-validation")
-def model_validation(study: Literal["v3", "v6"] = "v3"):
+def model_validation(study: Literal["v3", "v6", "v7", "v8"] = "v3"):
     """Read the latest archived study without running a simulation."""
     from finlab.analytics.validation_view import read_validation, summarize_validation
     from finlab.config import get_settings
 
     directory = get_settings().reports_dir / "research"
-    report = (
-        read_validation(directory, holdout=True) if study == "v6" else read_validation(directory)
-    )
+    report = read_validation(directory, holdout=study == "v6", study=study)
     if report is None:
         return {"reason": "No historical validation report has been archived."}
     return summarize_validation(report)
@@ -28,16 +52,14 @@ def model_validation(study: Literal["v3", "v6"] = "v3"):
 def model_validation_series(
     horizon: Literal["21", "63", "126", "252"] = "21",
     series: str = "opportunity",
-    study: Literal["v3", "v6"] = "v3",
+    study: Literal["v3", "v6", "v7", "v8"] = "v3",
 ):
     """Return the archived time series for one factor or model."""
     from finlab.analytics.validation_view import read_validation, validation_series
     from finlab.config import get_settings
 
     directory = get_settings().reports_dir / "research"
-    report = (
-        read_validation(directory, holdout=True) if study == "v6" else read_validation(directory)
-    )
+    report = read_validation(directory, holdout=study == "v6", study=study)
     if report is None:
         return {
             "reason": "No historical validation report has been archived.",
@@ -85,6 +107,28 @@ class PortfolioRequest(BaseModel):
     foreign_fx: float | None = Field(default=None, gt=0)
     scenario_security: str | None = None
     scenario_amount: float | None = Field(default=None, gt=0)
+
+
+@router.get("/portfolio/ledger")
+def portfolio_ledger(revision: Annotated[int | None, Query(ge=0)] = None):
+    from finlab.analytics.portfolio_ledger import read_ledger
+    from finlab.config import get_settings
+
+    record = read_ledger(get_settings().data_dir / "personal" / "portfolio.sqlite", revision)
+    if record is None:
+        raise HTTPException(status_code=404, detail="No such portfolio revision.")
+    return record
+
+
+@router.put("/portfolio/ledger")
+def update_portfolio_ledger(update: LedgerUpdate):
+    from finlab.analytics.portfolio_ledger import LedgerConflict, save_ledger
+    from finlab.config import get_settings
+
+    try:
+        return save_ledger(get_settings().data_dir / "personal" / "portfolio.sqlite", update)
+    except LedgerConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/portfolio/analyze")

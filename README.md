@@ -84,6 +84,7 @@ reports disclose uncertainty, coverage and survivorship bias.
 - [V6 financial repair, coverage, and held-out evaluation](docs/financial_repair_v6.md)
 - [V7 SEC reliability, financial coverage, and share classes](docs/data_reliability_v7.md)
 - [V7 financial performance, events, and score coverage](docs/financial_performance_v7.md)
+- [V8 data recovery, held-out study, calendar, and personal ledger](docs/v8_implementation.md)
 - [V4 UX audit](docs/ux_v4_audit.md)
 
 ## Architecture invariants

@@ -6,11 +6,13 @@ import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import structlog
 
 from finlab.engine.status import read_sec_checkpoint, write_sec_checkpoint
 from finlab.ingest.companyfacts import (
     FACT_COLUMNS,
+    IngestError,
     fetch_poc_universe,
     ingest_poc,
     load_manifest,
@@ -18,13 +20,28 @@ from finlab.ingest.companyfacts import (
     read_raw,
     save_manifest,
 )
-from finlab.ingest.sec import SecEtiquetteError, SecFailure
-from finlab.ingest.submissions import ingest_submissions, load_submissions, raw_path
+from finlab.ingest.sec import SecClient, SecEtiquetteError, SecFailure, sec_failure
+from finlab.ingest.statement_recovery import (
+    SUPPORTED_FORMS,
+    StatementRecoveryError,
+    filing_url,
+    load_recovery,
+    recovery_path,
+    store_recovery,
+)
+from finlab.ingest.submissions import (
+    ingest_submissions,
+    load_submissions,
+    raw_path,
+    validate_filing_columns,
+)
 from finlab.ingest.universe import load_poc_universe
 
 log = structlog.get_logger(__name__)
 STATEMENTS = {"10-K", "10-Q", "10-KT", "10-QT", "20-F", "40-F"}
-ACCESSION = FACT_COLUMNS.index("accession_number")
+ACCESSION, PERIOD, FILED, FORM = (
+    FACT_COLUMNS.index(field) for field in ("accession_number", "period_end", "filed_date", "form")
+)
 
 
 class SecSyncIncomplete(RuntimeError):
@@ -32,6 +49,7 @@ class SecSyncIncomplete(RuntimeError):
         self.retry_after = max(
             [
                 3600 if report["pending"] else 0,
+                report.get("archive_retry_after", 0),
                 *(failure["retry_after"] or 0 for failure in report["issuer_errors"].values()),
             ]
         )
@@ -48,25 +66,43 @@ def _cached_accessions(settings, cik):
     try:
         payload = read_raw(settings, cik)
         if int(payload.get("cik", 0)) != cik or not isinstance(payload.get("facts"), dict):
-            return set(), "COMPANY_FACTS_CACHE_INVALID"
-        return {row[ACCESSION] for row in parse_companyfacts(payload)}, None
+            return {}, "COMPANY_FACTS_CACHE_INVALID"
+        statements = {}
+        for row in parse_companyfacts(payload):
+            statements.setdefault(row[ACCESSION], set()).add(
+                (str(row[PERIOD]), str(row[FILED]), row[FORM])
+            )
+        return statements, None
     except FileNotFoundError:
-        return set(), "COMPANY_FACTS_CACHE_MISSING"
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
-        return set(), "COMPANY_FACTS_CACHE_INVALID"
+        return {}, "COMPANY_FACTS_CACHE_MISSING"
+    except IngestError:
+        return {}, "COMPANY_FACTS_INVALID_OBSERVATIONS"
+    except (OSError, EOFError, ValueError, TypeError, KeyError, AttributeError):
+        return {}, "COMPANY_FACTS_CACHE_INVALID"
 
 
-def _discover(settings, companies, previous, cutoff, through, failed):
+def _discover(settings, companies, previous, cutoff, through, failures):
     """Remember previously unresolved filings even outside the discovery window."""
     candidates = {(row["cik"], row["accession"]): row for row in previous}
     for company in companies:
-        if company.cik in failed:
+        if str(company.cik) in failures:
             continue
-        with gzip.open(raw_path(settings, company.cik), "rt") as handle:
-            index = json.load(handle)["filings"]["recent"]
+        try:
+            with gzip.open(raw_path(settings, company.cik), "rt") as handle:
+                payload = json.load(handle)
+            if int(payload.get("cik", 0)) != company.cik:
+                raise ValueError("Issuer does not match the SEC submission")
+            index = payload["filings"]["recent"]
+            validate_filing_columns(index)
+        except (OSError, EOFError, ValueError, TypeError, KeyError, AttributeError):
+            failures[str(company.cik)] = asdict(SecFailure("SUBMISSIONS_CACHE_INVALID", True))
+            continue
         tags = dict(zip(index["accessionNumber"], index.get("isXBRL", []), strict=False))
         inline = dict(zip(index["accessionNumber"], index.get("isInlineXBRL", []), strict=False))
         periods = dict(zip(index["accessionNumber"], index.get("reportDate", []), strict=False))
+        documents = dict(
+            zip(index["accessionNumber"], index.get("primaryDocument", []), strict=False)
+        )
         for accession, form, filed in zip(
             index["accessionNumber"],
             index["form"],
@@ -91,8 +127,66 @@ def _discover(settings, companies, previous, cutoff, through, failed):
                 form=form,
                 report_period=periods.get(accession) or None,
                 inline_xbrl=inline.get(accession) in (1, "1") if accession in inline else None,
+                primary_url=filing_url(company.cik, accession, documents.get(accession)),
             )
     return candidates
+
+
+def _check_statement(settings, filing, observations):
+    """Return an exact availability result without making a provider call."""
+    accession = filing["accession"]
+    available, cache_error = observations
+    if accession in available and (
+        not filing.get("report_period")
+        or (filing["report_period"], filing["filed_date"], filing["form"]) in available[accession]
+    ):
+        return None, None
+    if filing.get("primary_url") and filing.get("inline_xbrl") and filing.get("report_period"):
+        try:
+            verified, provenance, _ = load_recovery(
+                recovery_path(settings, filing["cik"], accession)
+            )
+            keys = ("cik", "accession", "filed_date", "report_period", "form", "primary_url")
+            if all(verified[key] == filing[key] for key in keys):
+                return None, provenance
+            return "PRIMARY_FILING_IDENTITY_MISMATCH", None
+        except FileNotFoundError:
+            pass
+        except (OSError, EOFError, ValueError, TypeError, KeyError):
+            return "PRIMARY_FILING_CACHE_INVALID", None
+    if accession in available:
+        return "COMPANY_FACTS_PERIOD_MISMATCH", None
+    return cache_error or "ACCESSION_MISSING_IN_COMPANY_FACTS", None
+
+
+async def _recover_primary(settings, pending, report=None):
+    """Use the official primary document only for verified Company Facts gaps."""
+    results = {}
+    async with SecClient(settings) as client:
+        for filing in pending:
+            accession = filing["accession"]
+            try:
+                body = await client.get_bytes(filing["primary_url"])
+                if body is None:
+                    results[accession] = ("PRIMARY_FILING_NOT_AVAILABLE", None)
+                    continue
+                results[accession] = (None, store_recovery(settings, filing, body))
+            except StatementRecoveryError as exc:
+                results[accession] = (exc.code, None)
+            except httpx.HTTPError as exc:
+                failure = sec_failure(exc)
+                results[accession] = (f"PRIMARY_FILING_{failure.code}", None)
+                if report is not None:
+                    report["archive_retry_after"] = max(
+                        report.get("archive_retry_after", 0), failure.retry_after or 0
+                    )
+                    if not failure.retryable:
+                        report["issuer_errors"][str(filing["cik"])] = asdict(
+                            SecFailure(f"PRIMARY_FILING_{failure.code}", False)
+                        )
+                if failure.code in {"HTTP_401", "HTTP_403", "RATE_LIMITED"}:
+                    break  # Let the provider's access response govern future requests.
+    return results
 
 
 def inspect_cached_financials(settings, *, now=None):
@@ -102,29 +196,32 @@ def inspect_cached_financials(settings, *, now=None):
     previous = read_sec_checkpoint(directory)
     companies = load_poc_universe(settings.universe_path)
     absent = {company.cik for company in companies if not raw_path(settings, company.cik).is_file()}
+    errors = {
+        str(cik): asdict(SecFailure("SUBMISSIONS_CACHE_MISSING", True)) for cik in sorted(absent)
+    }
     candidates = _discover(
         settings,
         companies,
         previous["pending"],
         (now.date() - timedelta(days=30)).isoformat(),
         now.date().isoformat(),
-        absent,
+        errors,
     )
     available = {cik: _cached_accessions(settings, cik) for cik in {key[0] for key in candidates}}
-    pending = [
-        {**row, "reason": available[cik][1] or "ACCESSION_MISSING_IN_COMPANY_FACTS"}
-        for (cik, accession), row in sorted(candidates.items())
-        if accession not in available[cik][0]
-    ]
-    errors = {
-        str(cik): asdict(SecFailure("SUBMISSIONS_CACHE_MISSING", True)) for cik in sorted(absent)
-    }
+    recovered, pending = {}, []
+    for (cik, accession), row in sorted(candidates.items()):
+        reason, provenance = _check_statement(settings, row, available[cik])
+        if reason:
+            pending.append({**row, "reason": reason})
+        elif provenance:
+            recovered[accession] = {**row, **provenance}
     return {
         **previous,
         "state": "degraded" if pending or errors else previous["state"],
         "updated_at": now.isoformat(),
         "observation": "local_cache",
         "pending": pending,
+        "verified_recoveries": {**previous.get("verified_recoveries", {}), **recovered},
         "issuer_errors": errors,
     }
 
@@ -148,6 +245,7 @@ def sync_financials(con, settings, *, full: bool = False) -> int:
         updated_at=now.isoformat(),
         last_success_at=previous.get("last_success_at"),
         pending=previous.get("pending", []),
+        verified_recoveries=previous.get("verified_recoveries", {}),
         issuer_errors={},
         staging_required=previous.get("staging_required", False),
     )
@@ -198,7 +296,7 @@ def _synchronize(con, settings, report, directory, full, since, now):
         report["pending"],
         (now.date() - timedelta(days=30)).isoformat(),
         now.date().isoformat(),
-        set(submissions.missing),
+        errors,
     )
     by_issuer = {}
     for (cik, accession), row in candidates.items():
@@ -215,7 +313,7 @@ def _synchronize(con, settings, report, directory, full, since, now):
     affected = [
         company
         for company in companies
-        if (full or company.cik in by_issuer) and company.cik not in submissions.missing
+        if (full or company.cik in by_issuer) and str(company.cik) not in errors
     ]
     report["affected_issuers"] = len(affected)
     report["staging_required"] = report["staging_required"] or bool(affected)
@@ -224,13 +322,12 @@ def _synchronize(con, settings, report, directory, full, since, now):
     for company in affected:
         required = by_issuer.get(company.cik, {})
         fetched_at = manifest.get(str(company.cik), {}).get("fetched_at")
-        if (
-            since
-            and fetched_at
-            and datetime.fromisoformat(fetched_at) >= since
-            and set(required) <= _cached_accessions(settings, company.cik)[0]
-        ):
-            continue
+        if since and fetched_at and datetime.fromisoformat(fetched_at) >= since:
+            cached = _cached_accessions(settings, company.cik)
+            if not cached[1] and all(
+                not _check_statement(settings, row, cached)[0] for row in required.values()
+            ):
+                continue
         fetch.append(company)
     if fetch:
         fetched = asyncio.run(fetch_poc_universe(fetch, settings, force=True))
@@ -238,24 +335,46 @@ def _synchronize(con, settings, report, directory, full, since, now):
             errors[str(cik)] = asdict(
                 getattr(fetched, "errors", {}).get(cik, SecFailure("COMPANY_FACTS_MISSING", True))
             )
-    manifest = load_manifest(settings)
-    pending = []
+    pending, recoverable = {}, []
     for cik, records in by_issuer.items():
-        available, cache_error = (
-            _cached_accessions(settings, cik) if str(cik) not in errors else (set(), None)
-        )
-        pending.extend(
-            {
-                **row,
-                "reason": errors.get(str(cik), {}).get(
-                    "code", cache_error or "ACCESSION_MISSING_IN_COMPANY_FACTS"
-                ),
-            }
-            for accession, row in records.items()
-            if accession not in available
-        )
+        failure = errors.get(str(cik))
+        cached = _cached_accessions(settings, cik) if not failure else ({}, failure["code"])
+        for accession, row in records.items():
+            reason, provenance = (
+                _check_statement(settings, row, cached) if not failure else (failure["code"], None)
+            )
+            if provenance:
+                report["verified_recoveries"][accession] = {**row, **provenance}
+            if not reason:
+                continue
+            pending[accession] = {**row, "reason": reason}
+            if (
+                reason
+                in {
+                    "ACCESSION_MISSING_IN_COMPANY_FACTS",
+                    "COMPANY_FACTS_PERIOD_MISMATCH",
+                    "PRIMARY_FILING_CACHE_INVALID",
+                }
+                and not cached[1]
+                and row.get("inline_xbrl")
+                and row.get("primary_url")
+                and row.get("report_period")
+                and row["form"] in SUPPORTED_FORMS
+            ):
+                recoverable.append(row)
+    if recoverable and not any(
+        failure["code"] in {"HTTP_401", "HTTP_403", "RATE_LIMITED"} for failure in errors.values()
+    ):
+        for accession, (reason, provenance) in asyncio.run(
+            _recover_primary(settings, recoverable, report)
+        ).items():
+            if provenance:
+                report["verified_recoveries"][accession] = {**pending.pop(accession), **provenance}
+                report["verified_recoveries"][accession].pop("reason")
+            elif reason:
+                pending[accession]["reason"] = reason
     if pending or errors:
-        report["pending"] = sorted(pending, key=lambda row: (row["cik"], row["accession"]))
+        report["pending"] = sorted(pending.values(), key=lambda row: (row["cik"], row["accession"]))
         raise SecSyncIncomplete(report)
     if report["staging_required"]:
         # Staging is deferred until every issuer and archive page is verified.

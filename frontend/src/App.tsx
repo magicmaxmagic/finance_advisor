@@ -9,6 +9,7 @@ import { StrategyLab, DataCenterControls } from './ResearchTools'
 import { Compare } from './Compare'
 import { ResearchGlossary } from './ResearchGlossary'
 import { FinancialPerformance, type PerformanceData } from './FinancialPerformance'
+import { EventCalendar } from './EventCalendar'
 
 const ModelValidation = lazy(() => import('./ModelValidation').then(module => ({ default: module.ModelValidation })))
 const Portfolio = lazy(() => import('./Portfolio').then(module => ({ default: module.Portfolio })))
@@ -28,7 +29,7 @@ type Asset = {
   facts: { tag: string; unit: string; value: number; filed_date: string; period_end: string; duration_bucket: string }[]
 }
 const navigation = [
-  { title: 'Research', pages: [['Overview', '◫'], ['Discover', '◈'], ['Company Research', '◎'], ['Compare', '⇆'], ['Model Validation', '≋'], ['Strategies', '↗']] },
+  { title: 'Research', pages: [['Overview', '◫'], ['Discover', '◈'], ['Company Research', '◎'], ['Compare', '⇆'], ['Calendar', '▦'], ['Model Validation', '≋'], ['Strategies', '↗']] },
   { title: 'Personal', pages: [['Portfolio', '◧'], ['Watchlist', '☆']] },
   { title: 'Operations', pages: [['Data Center', '▤']] },
 ] as const
@@ -37,7 +38,7 @@ const slug = (page: Page) => page.toLowerCase().replaceAll(' ', '-')
 const titles: Record<Page, string> = {
   Overview: 'Market overview', Discover: 'Discover companies', 'Company Research': 'Company research',
   Compare: 'Company comparison', 'Model Validation': 'Model validation', Strategies: 'Strategy lab', Portfolio: 'Portfolio',
-  Watchlist: 'Watchlist', 'Data Center': 'Data Center',
+  Watchlist: 'Watchlist', Calendar: 'Calendar', 'Data Center': 'Data Center',
 }
 
 function readLocation(): { page: Page; ticker: string } {
@@ -72,14 +73,19 @@ function useRequest<T>(url: string | null) {
     retry: () => { setResult(null); retry(n => n + 1) } }
 }
 
-function CompanyFinancialPerformance({ identity, cutoff }: { identity: string; cutoff: string }) {
-  const [open, setOpen] = useState(false)
+function CompanyFinancialPerformance({ identity, cutoff, company }: { identity: string; cutoff: string; company: string }) {
+  const [route] = useState(() => new URLSearchParams(location.search))
+  const [open, setOpen] = useState(() => route.get('financial') === '1')
+  const region = useRef<HTMLElement>(null)
   const performance = useRequest<PerformanceData>(open ? `/api/analytics/financial-performance/${encodeURIComponent(identity)}?as_of=${cutoff}` : null)
-  return <section className="panel company-financial-performance" id="company-financial-performance" aria-labelledby="performance-heading">
+  useEffect(() => {
+    if (route.get('financial') === '1' && performance.data) region.current?.scrollIntoView({ block: 'start' })
+  }, [route, performance.data])
+  return <section ref={region} className="panel company-financial-performance" id="company-financial-performance" aria-labelledby="performance-heading">
     <header><div><h2 id="performance-heading">Financial performance</h2><p>See where revenue goes, how profit changes, and which filings support the numbers.</p></div>
       <button type="button" aria-expanded={open} aria-controls="company-financial-performance-details" onClick={() => setOpen(!open)}>{open ? 'Hide financial performance' : 'Open financial performance'}</button></header>
     <div id="company-financial-performance-details" hidden={!open}>
-      {open && (performance.data ? <FinancialPerformance data={performance.data} /> :
+      {open && (performance.data ? <FinancialPerformance data={performance.data} company={company} initialPeriod={route.get('period')} /> :
         <Pending message="Loading financial statements and events…" error={performance.error} retry={performance.retry} />)}
     </div>
   </section>
@@ -160,6 +166,10 @@ function App() {
   const assessment = useRequest<Assessment>(companyRoute ? `/api/analytics/factors/${encodeURIComponent(ticker)}?as_of=${effective}` : null)
   const priceHistory = useRequest<{ prices: Point[]; benchmark: Point[] }>(companyRoute && identity
     ? `/api/warehouse/history/${encodeURIComponent(identity)}?as_of=${effective}` : null)
+  const upcomingThrough = companyRoute ? new Date(Date.parse(effective + 'T12:00:00Z') + 62 * 86400000).toISOString().slice(0, 10) : ''
+  const companyEvents = useRequest<{ events: { event_date: string; label: string; status: string }[] }>(companyRoute && identity
+    ? `/api/analytics/calendar?start=${effective}&end=${upcomingThrough}&as_of=${effective}&ticker=${encodeURIComponent(ticker)}` : null)
+  const nextConfirmed = companyEvents.data?.events.find(event => event.event_date >= effective && event.status === 'confirmed')
   const candidates = query.trim() ? (universe.data?.companies ?? []).filter(company =>
     `${company.ticker} ${company.name}`.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 7) : []
   const trend = assessment.data?.market_factors.find(item => item.factor === 'price_to_sma200')?.value
@@ -250,7 +260,7 @@ function App() {
               <button type="button" onClick={() => navigate('Portfolio',ticker)}>Portfolio impact</button></div>
           </section>
           {assessment.data && score ? <>
-            <section className="panel assessment-hero"><div><span className="eyebrow">RESEARCH SCORE</span><h2>Investment opportunity</h2>
+            <section className="panel assessment-hero" id="company-assessment-summary" tabIndex={-1}><div><span className="eyebrow">RESEARCH SCORE</span><h2>Investment opportunity</h2>
               <div className="hero-score">{score.opportunity_score == null ? <strong className="score-unavailable">Unavailable</strong>
                 : <>{scoreText(score.opportunity_score)} <span>/ 100</span></>}</div>
               <p>{score.opportunity_score == null ? 'The available evidence does not support a combined score for this date.'
@@ -277,16 +287,29 @@ function App() {
                 {concerns.length > 0 && <ul>{concerns.map(item => <li key={item.metric}>{metricName(item.metric)} · {scoreText(item.score)}/100</li>)}</ul>}
                 {trend == null && !riskMissing.length && !concerns.length && !assessment.data.market_cap_diagnostic && <p>Review the evidence before drawing a conclusion.</p>}</section>
               <section className="panel"><h2>What to watch</h2>{score.contradictions.length ? score.contradictions.map(item => <p key={item}>{item}</p>)
-                : <p>{trend != null ? `Price is ${pct(Math.abs(trend))} ${trend >= 0 ? 'above' : 'below'} its 200-day average. Watch for a close on the other side of that level.` : 'Trend confirmation needs a full 200-session price window.'}</p>}</section>
+                : <p>{trend != null ? `Price is ${pct(Math.abs(trend))} ${trend >= 0 ? 'above' : 'below'} its 200-day average. Watch for a close on the other side of that level.` : 'Trend confirmation needs a full 200-session price window.'}</p>}
+                {nextConfirmed && <p><strong>{nextConfirmed.label}</strong> · {nextConfirmed.event_date} · Confirmed</p>}
+                <button type="button" className="text-button" onClick={() => navigate('Calendar')}>Open financial calendar</button>
+              </section>
             </div>
           </> : <Pending message="Evaluating fundamentals, market conditions, and risk…" error={assessment.error} retry={assessment.retry} />}
           <div className="company-price-history" ref={companyChart} tabIndex={-1}>
             <FinancialChart key={`prices-${ticker}`} points={prices} benchmark={priceHistory.data?.benchmark} label="Price history" currency={company?.currency} />
           </div>
           {priceHistory.error && <p role="status">Extended history unavailable. Showing recent prices. <button type="button" onClick={priceHistory.retry}>Retry history</button></p>}
-          {identity && <CompanyFinancialPerformance key={`${identity}-${effective}`} identity={identity} cutoff={effective} />}
+          {identity && <CompanyFinancialPerformance key={`${identity}-${effective}`} identity={identity} cutoff={effective}
+            company={company?.name.replace(/(?:,)?\s+(?:Inc\.?|Corp\.?|Corporation|plc)$/i, '') ?? ticker} />}
           {assessment.data && <CompanyAssessment key={`evidence-${ticker}`} data={assessment.data} />}
-          <ResearchGlossary />
+          <ResearchGlossary visit={destination => {
+            if (destination === 'search') { search.current?.focus(); return }
+            if (destination === 'validation') { navigate('Model Validation'); return }
+            if (destination === 'watchlist') {
+              if (!watchlist.includes(ticker)) toggleWatch()
+              navigate('Watchlist'); return
+            }
+            const target = destination === 'price' ? companyChart.current : document.getElementById(destination === 'summary' ? 'company-assessment-summary' : 'company-research-details')
+            target?.focus({ preventScroll:true }); target?.scrollIntoView({ block:'start' })
+          }} />
           <details className="panel"><summary>Latest filing and source observations</summary>
             <p>{asset.data.latest_filing ? `${asset.data.latest_filing.form} · filed ${asset.data.latest_filing.filed_date}` : 'No filing available at this cutoff.'}</p>
             <div className="table-wrap"><table><thead><tr><th>Observation</th><th>Period</th><th>Filed</th><th>Value</th></tr></thead>
@@ -295,6 +318,7 @@ function App() {
         </>}
 
         {page === 'Model Validation' && <Suspense fallback={<p role="status">Loading research charts…</p>}><ModelValidation /></Suspense>}
+        {page === 'Calendar' && <EventCalendar key={cutoff} cutoff={cutoff} watchlist={watchlist} companies={universe.data?.companies ?? []} />}
         {page === 'Strategies' && <StrategyLab />}
         {page === 'Portfolio' && <Suspense fallback={<p role="status">Loading portfolio…</p>}><Portfolio key={ticker} companies={universe.data?.companies ?? []} initialTicker={ticker} latest={effective} /></Suspense>}
         {page === 'Data Center' && <>
@@ -302,7 +326,7 @@ function App() {
             <article className="panel" key={key}><span>{({ entity: 'Tracked issuers', filing: 'SEC filings', security: 'Security records', fact: 'Financial observations', price_daily: 'Daily price observations' } as Record<string,string>)[key] ?? key}</span><strong>{count.toLocaleString('en-US')}</strong></article>)}</div>
             : <Pending message="Loading warehouse status…" error={warehouse.error} retry={warehouse.retry} />}
           {warehouse.data && <section className="panel"><h2>Current publication</h2><dl className="publication"><dt>Published</dt><dd>{warehouse.data.published_at ? new Date(warehouse.data.published_at).toLocaleString('en-US') : 'Unavailable'}</dd>
-            {warehouse.data.publication_scope === 'evidence_only' && <><dt>Scope</dt><dd>Share-class and event evidence added. Core data remains pinned to {warehouse.data.base_epoch}.</dd></>}
+            {warehouse.data.publication_scope === 'evidence_only' && <><dt>Scope</dt><dd>Financial evidence updated. Core data remains pinned to {warehouse.data.base_epoch}.</dd></>}
             <dt>Price freshness</dt><dd>{warehouse.data.price_current_through_expected
               ? `Published through expected session ${warehouse.data.last_expected_session}`
               : warehouse.data.last_expected_session ? `Expected through ${warehouse.data.last_expected_session}` : 'Unavailable'}</dd>

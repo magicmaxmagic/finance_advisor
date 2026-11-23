@@ -31,8 +31,10 @@ OPTIONAL_DATASETS = (
     "ticker_history",
     "share_class_fact",
     "financial_event",
+    "revenue_breakdown",
+    "financial_text",
 )
-EVIDENCE_DATASETS = {"share_class_fact", "financial_event"}
+EVIDENCE_DATASETS = {"share_class_fact", "financial_event", "revenue_breakdown", "financial_text"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,4 +182,6 @@ def read_latest_snapshot(warehouse_dir: Path, epoch: str | None = None) -> Wareh
         published_at=str(payload["published_at"]),
         dataset_status=dict(payload["dataset_status"]),
         checksums=dict(payload["checksums"]),
+        base_epoch=payload.get("base_epoch"),
+        publication_scope=payload.get("publication_scope", "full"),
     )

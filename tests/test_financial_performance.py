@@ -53,8 +53,60 @@ def test_statement_uses_consolidated_profit_and_reconciled_flows():
         "source": "operating_income",
         "target": "nonoperating_loss",
         "amount": 10,
-        "tone": "cost",
+        "tone": "adjustment",
     } in result["links"]
+    connections = {(edge["source"], edge["target"]): edge["amount"] for edge in result["links"]}
+    assert connections == {
+        ("revenue", "gross_profit"): 60,
+        ("revenue", "cost_of_revenue"): 40,
+        ("gross_profit", "operating_income"): 40,
+        ("gross_profit", "research"): 7,
+        ("gross_profit", "selling_general_admin"): 13,
+        ("operating_income", "pretax"): 30,
+        ("operating_income", "nonoperating_loss"): 10,
+        ("pretax", "net_income"): 25,
+        ("pretax", "tax"): 5,
+    }
+
+
+def test_gains_and_tax_benefits_have_distinct_conserved_sources():
+    result = reconcile_statement(
+        {
+            **QUARTER,
+            "NonoperatingIncomeExpense": [8],
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": [
+                48
+            ],
+            "IncomeTaxExpenseBenefit": [-2],
+            "ProfitLoss": [50],
+        }
+    )
+    assert result["chart_status"] == "available"
+    flows = {(row["source"], row["target"]): row["amount"] for row in result["links"]}
+    assert flows[("nonoperating_gain", "pretax")] == 8
+    assert flows[("operating_income", "pretax")] == 40
+    assert flows[("tax_benefit", "net_income")] == 2
+    assert flows[("pretax", "net_income")] == 48
+    assert not {"tax", "nonoperating_loss"} & {key[1] for key in flows}
+
+
+def test_negative_operating_profit_displays_a_signed_statement():
+    result = reconcile_statement(
+        {
+            **QUARTER,
+            "CostsAndExpenses": [102],
+            "OperatingIncomeLoss": [-2],
+            "NonoperatingIncomeExpense": [10],
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": [
+                8
+            ],
+            "IncomeTaxExpenseBenefit": [3],
+            "ProfitLoss": [5],
+        }
+    )
+    assert result["chart_status"] == "signed_statement"
+    assert result["values"]["operating_income"]["value"] == -2
+    assert result["links"] == []
 
 
 def test_incomplete_inconsistent_and_loss_statements_keep_signed_values():

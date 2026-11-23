@@ -52,6 +52,7 @@ Analytics selects a single accession and fiscal duration from the latest eligibl
 
 ```mermaid
 flowchart LR
+  S[Verified filing revenue categories] --> R
   R[Revenue] --> C[Cost of revenue]
   R --> G[Gross profit]
   G --> O[Operating expenses]
@@ -62,7 +63,7 @@ flowchart LR
   P --> N[Net income]
 ```
 
-When explicitly reported gross profit is unavailable, revenue less cost of revenue can supply it. Reported total costs less cost of revenue can supply aggregate operating costs, or gross profit less operating income can identify the aggregate as a residual. Operating expense components are displayed as Sankey branches only if disjoint reported concepts sum to the full aggregate. Pretax income less operating income can supply a signed nonoperating aggregate. The final bridge checks reported net income against pretax income less tax, using the consolidated profit concept when present. Reported-versus-calculated differences must be within one USD. Incomplete, mismatched, and core-loss statements retain their signed values and suppress the positive-flow chart. Segments are unavailable until dimensional revenue can be reconciled with eliminations and traced to the filing.
+When explicitly reported gross profit is unavailable, revenue less cost of revenue can supply it. Reported total costs less cost of revenue can supply aggregate operating costs, or gross profit less operating income can identify the aggregate as a residual. Operating expense components are displayed as Sankey branches only if disjoint reported concepts sum to the full aggregate. Pretax income less operating income can supply a signed nonoperating aggregate. The final bridge checks reported net income against pretax income less tax, using the consolidated profit concept when present. Reported-versus-calculated differences must be within one USD. Incomplete, mismatched, and core-loss statements retain their signed values and suppress the positive-flow chart. The revenue-source layer uses an independently reconciled XBRL disclosure. Segment expenses and margins are outside that disclosure.
 
 | Alphabet (USD billions) | Q3 2026 | Q3 2025 | FY 2025 |
 |---|---:|---:|---:|
@@ -80,9 +81,45 @@ Each reported bridge reconciled with zero difference. Operating margin rose from
 
 ## Official events and user interface
 
-Company Research opens Financial Performance directly below price history. Readers can choose annual or quarterly periods, compare against the equivalent prior-year period, inspect Sankey flows by mouse or keyboard, and open Quant mode for filing concepts, source precision and checks. The signed table remains accessible on mobile and in print.
+Company Research opens Financial Performance directly below price history. The chart uses D3 Sankey for proportional widths and Bézier routing. Accounting stages and a straight profit lane give branches consistent positions. An expandable view, keyboard inspection, standalone SVG export, and print styling share the same data. Readers can compare the equivalent prior-year period, separate YoY changes from margins, and open Quant mode for filing concepts and checks. The signed table remains accessible on mobile and in print.
+
+### Reported revenue sources
+
+The Data Engine parses the archived SEC Inline XBRL document with an accession-bound source digest. It reads one USD revenue table for a single issuer and fiscal duration. Only business-segment and product-within-segment dimensions qualify. Product rows must reconcile to their segment subtotal, alternative tables must agree or be a provable coarser rollup, and every included line must sum to reported consolidated revenue. Analytics checks the total again before adding source flows. Geographic totals and other overlapping axes stay outside the graph. Sources remain optional for periods without valid evidence. Signed revenue adjustments that cannot be represented as positive inflows also leave the layer unavailable.
+
+| Q3 2026 revenue source | USD billions |
+|---|---:|
+| Google Search & other | 63.350 |
+| YouTube ads | 11.207 |
+| Google Network | 7.455 |
+| Google subscriptions, platforms, and devices | 14.290 |
+| Google Cloud | 30.709 |
+| Other Bets | 0.372 |
+| Hedging gains (losses) | 0.194 |
+| Consolidated revenue | 127.577 |
+
+The revenue layer was published in evidence-only epoch `20261123T030845567073Z-f70962eb5ab8476eb1ad1f1b08591dce`. Its parent is the evidence epoch above and its core checksums remain unchanged. [Alphabet 2026 Q3 10-Q](https://www.sec.gov/Archives/edgar/data/1652044/000165204426000084/goog-20260930.htm)
 
 The calendar uses a reviewable local import alongside published SEC filing and corporate-action observations. It supports earnings announcements, confirmed calls, investor events, dividends and corporate actions. Future dates require an attributed source; date-only entries retain their precision. A completed earnings event links to its corresponding quarterly statement only once the filing is visible at the requested cutoff. On October 28 the Alphabet event is visible and the October 29 filing is still unavailable. The December 14 common-dividend payment is listed as confirmed as of November 20. [Calendar source records](alphabet_events_v7.json) · [SEC earnings exhibit](https://www.sec.gov/Archives/edgar/data/1652044/000165204426000080/googexhibit991q32026.htm)
+
+## Historical revalidation
+
+The study repeated the original 2020-01-02 through 2026-11-20 protocol with a frozen test boundary of 2023-01-01, prior-day filing information, next-session entry, ten basis points per side, and block bootstrap where supported. The first evidence epoch supplied the core research inputs. The later revenue disclosure epoch changes no input to the Opportunity Score.
+
+| Sessions | Held-out windows | Opportunity rank IC | 95% interval | Fundamental-only IC | Additional score-eligible stock-windows |
+|---:|---:|---:|---|---:|---:|
+| 21 | 46 | +0.0018 | −0.0429 to +0.0478 | +0.0158 | 58 |
+| 63 | 15 | +0.0049 | −0.0532 to +0.0664 | +0.0474 | 18 |
+| 126 | 7 | +0.0282 | Insufficient windows | −0.0142 | 8 |
+| 252 | 3 | −0.0885 | Insufficient windows | −0.0888 | 3 |
+
+The 21-session baseline mean was +0.0061. On exactly the original company-window membership, the average IC change was −0.00017 (95% interval −0.00069 to +0.00035) and the top quintile's net benchmark excess was unchanged. The expanded universe study adds 58 score-eligible company-window observations at this horizon. The change in the expanded mean includes expanded membership and ranking differences. The study is affected by survivorship bias and has inconclusive predictive evidence. No score weights were promoted.
+
+```sh
+env PYTHONPATH=src .venv/bin/python -m finlab.analytics.cli validate-signals 2020-01-02 2026-11-20 \
+  --test-start 2023-01-01 --epoch 20261122T212044395384Z-eb313e5c99324bc691c7025620a6a92b \
+  --baseline-report data/reports/research/validation-v6-2020-01-02-2026-11-20-e12636e4497b72ca.json
+```
 
 ## Reproduce locally
 
@@ -94,6 +131,13 @@ env PYTHONPATH=src .venv/bin/python -m finlab.analytics.cli score-blockers 2026-
 curl 'http://127.0.0.1:8000/api/analytics/financial-performance/GOOGL?as_of=2026-11-20'
 ```
 
-To install the reviewed calendar on a compatible warehouse, stop the Data Engine writer, run `env PYTHONPATH=src .venv/bin/python -m finlab.engine.cli stage-events docs/alphabet_events_v7.json`, then run `env PYTHONPATH=src .venv/bin/python -m finlab.engine.cli publish-evidence` and restart the daemon. No database migration was required. The local reports and screenshots are under `data/reports/v7-performance/`.
+To install the reviewed calendar on a compatible warehouse, stop the Data Engine writer, run `env PYTHONPATH=src .venv/bin/python -m finlab.engine.cli stage-events docs/alphabet_events_v7.json`, then run `env PYTHONPATH=src .venv/bin/python -m finlab.engine.cli publish-evidence` and restart the daemon. For archived filing bytes, run `env PYTHONPATH=src .venv/bin/python -m finlab.engine.cli stage-revenue-breakdown 0001652044-26-000084` under the same stopped-writer workflow. No database migration was required. The local reports and screenshots are under `data/reports/v7-performance/`.
 
-The independent calendar feed is seeded for Alphabet. Other issuers still get their published SEC filings and price-provider corporate actions. Prospective events for additional issuers require reviewed sources. The full SEC publication remains degraded and no complete multiclass Alphabet valuation or segment waterfall is available.
+The independent calendar feed is seeded for Alphabet. Other issuers still get their published SEC filings and price-provider corporate actions. Prospective events for additional issuers require reviewed sources. The full SEC publication remains degraded. A complete multiclass Alphabet valuation and segment-level profitability remain unavailable.
+
+## Implementation files
+
+- `src/finlab/ingest/revenue_breakdown.py`, `engine/cli.py`, `engine/snapshot.py`, and `db/conn.py` stage and publish verified filing evidence under the Data Engine writer lock.
+- `src/finlab/analytics/financial_performance.py` reconciles the signed statement, validates flow conservation, and attaches a source breakdown only for the exact statement accession and duration.
+- `frontend/src/IncomeSankey.tsx`, `financialAmounts.ts`, `FinancialPerformance.tsx`, `App.tsx`, and `App.css` implement the chart, responsive summaries, evidence views, export, and print. In `ResearchTools.tsx`, each Data Center coverage response can render independently with bounded request time.
+- `tests/test_financial_performance.py`, `tests/test_revenue_breakdown.py`, and `frontend/e2e/googl-research.spec.ts` exercise financial topology, filing reconciliation, signed accounting, proportional flows, and the real browser workflows.

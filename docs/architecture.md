@@ -62,7 +62,7 @@ flowchart LR
 | Financial storage | The writer maintains native metadata and emits working Parquet. Facts and daily prices are accessed through explicit per-dataset Parquet views. |
 | Publication | A unique epoch contains immutable files. The publisher copies mutable inputs into a content-addressed object store and links epoch files to the immutable objects. A completed epoch and checksums precede the atomic update of `snapshots/latest.json`. |
 | Analytics | Pinned publication checks, canonical point-in-time facts, V2 company scores, separate legacy ranking and recommendation archives, portfolio analysis, strategies and V3 validation. |
-| Presentation | Vite proxies `/api` to FastAPI. The shell groups research, personal tools and operations. The refresh route writes a request to the control inbox for the engine. Portfolio trades are kept in browser-owned storage and are passed to Analytics only for validation or calculation. |
+| Presentation | Vite proxies `/api` to FastAPI. The shell groups research, personal tools and operations. The refresh route writes a request to the control inbox for the engine. Portfolio transactions live in a revisioned personal SQLite database outside the financial warehouse. |
 | Optional and historical code | The deterministic application runs without an LLM. The older text, valuation and report design below includes placeholders and longer-term ideas. The source guide marks these explicitly. |
 
 ## Read and publication lifecycle
@@ -146,8 +146,9 @@ interrupted jobs and enqueue price catch-up. Missed symbol-directory observation
 cannot be reconstructed from today's directory. The separate Analytics
 `research-daemon` schedules the weekly report for Saturday at noon UTC.
 
-See [deployment](../deploy/README.md) for systemd and launchd templates, and the
-[source guide](code_guide.md) for the command and HTTP contracts.
+See [deployment](../deploy/README.md) for systemd and launchd templates, the
+[source guide](code_guide.md) for the command and HTTP contracts, and
+[V8 implementation](v8_implementation.md) for primary SEC recovery and the personal ledger.
 
 ## Original design archive
 

@@ -1,7 +1,7 @@
 """Consolidated statement bridges and issuer events from one published epoch."""
 
 from datetime import UTC, datetime, time, timedelta
-from math import isfinite
+from math import isclose, isfinite
 from zoneinfo import ZoneInfo
 
 from finlab.analytics.financial_context import company_events
@@ -50,6 +50,31 @@ LABELS = {
     "tax": "Income tax",
     "net_income": "Net income",
 }
+
+
+def _conserves(links, internal, endpoints):
+    """Check each accounting node against its signed source amounts and flows."""
+    flows = {}
+    for link in links:
+        source, target, amount = link["source"], link["target"], link["amount"]
+        if source == target or not isfinite(amount) or amount <= 0:
+            return False
+        flows.setdefault(source, [0, 0])[1] += amount
+        flows.setdefault(target, [0, 0])[0] += amount
+    for node, amount in internal.items():
+        expected = [amount, amount]
+        if node not in flows or any(
+            not isclose(a, b, rel_tol=0, abs_tol=1)
+            for a, b in zip(flows[node], expected, strict=True)
+        ):
+            return False
+    for node, expected in endpoints.items():
+        if any(
+            not isclose(a, b, rel_tol=0, abs_tol=1)
+            for a, b in zip(flows.get(node, [0, 0]), expected, strict=True)
+        ):
+            return False
+    return not (set(flows) - internal.keys() - endpoints.keys())
 
 
 def reconcile_statement(facts):
@@ -189,11 +214,25 @@ def reconcile_statement(facts):
             min(value("operating_income"), value("pretax")),
             "retained",
         )
-        link("nonoperating_gain", "pretax", nonop, "income")
-        link("operating_income", "nonoperating_loss", -nonop, "cost")
+        link("nonoperating_gain", "pretax", nonop, "adjustment")
+        link("operating_income", "nonoperating_loss", -nonop, "adjustment")
         link("pretax", "net_income", min(value("pretax"), value("net_income")), "retained")
         link("pretax", "tax", tax, "cost")
-        link("tax_benefit", "net_income", -tax, "income")
+        link("tax_benefit", "net_income", -tax, "adjustment")
+        uses = {
+            key: [value(key), 0]
+            for key in ("cost_of_revenue", "net_income", *(components or ["operating_expenses"]))
+        }
+        uses.update(tax=[max(0, tax), 0], nonoperating_loss=[max(0, -nonop), 0])
+        sources = {
+            "revenue": [0, value("revenue")],
+            "tax_benefit": [0, max(0, -tax)],
+            "nonoperating_gain": [0, max(0, nonop)],
+        }
+        internal = {key: value(key) for key in ("gross_profit", "operating_income", "pretax")}
+        if not _conserves(links, internal, uses | sources):
+            chart_status = "unreconciled"
+            links = []
     revenue = value("revenue")
     margins = {}
     if revenue and revenue > 0:
@@ -209,6 +248,53 @@ def reconcile_statement(facts):
         "margins": margins,
         "expense_components": components,
     }
+
+
+def _add_revenue_breakdown(con, cik, tables, statements):
+    if "revenue_breakdown" not in tables or not statements:
+        return
+    rows = con.execute(
+        """SELECT accession_number,period_start,period_end,label,amount,concept,segment,product,
+                  source_url,source_sha256,ordinal FROM revenue_breakdown
+           WHERE cik=? AND accession_number IN (SELECT unnest(?))
+           ORDER BY accession_number,period_start,ordinal""",
+        [cik, [statement["accession"] for statement in statements]],
+    ).fetchall()
+    for item in statements:
+        if item["chart_status"] != "available":
+            continue
+        chosen = [
+            {
+                "id": f"revenue_source_{ordinal}",
+                "label": label,
+                "amount": amount,
+                "concept": concept,
+                "segment": segment,
+                "product": product,
+                "source_url": url,
+                "source_sha256": digest,
+            }
+            for acc, start, end, label, amount, concept, segment, product, url, digest, ordinal in rows
+            if acc == item["accession"]
+            and str(start) == item["period_start"]
+            and str(end) == item["period_end"]
+            and url == item["source_url"]
+        ]
+        total = item["values"]["revenue"]["value"]
+        if (
+            len(chosen) < 2
+            or any(row["amount"] < 0 for row in chosen)
+            or len({row["id"] for row in chosen}) != len(chosen)
+            or sum(row["amount"] for row in chosen) != total
+            or len({row["source_sha256"] for row in chosen}) != 1
+        ):
+            continue
+        item["revenue_sources"] = chosen
+        item["links"][0:0] = [
+            {"source": row["id"], "target": "revenue", "amount": row["amount"], "tone": "revenue"}
+            for row in chosen
+            if row["amount"] > 0
+        ]
 
 
 def _read_statements(con, cik, as_of, tables):
@@ -355,6 +441,7 @@ def financial_performance(identity, as_of, epoch=None):
         sid, cik, ticker = matches[0]
         tables = set(attached_views(con))
         statements = _read_statements(con, cik, as_of, tables)
+        _add_revenue_breakdown(con, cik, tables, statements)
         events = _read_events(con, cik, sid, as_of, tables, statements)
         publication = con.execute("SELECT epoch FROM _warehouse_publication").fetchone()[0]
     return {

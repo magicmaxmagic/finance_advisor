@@ -225,13 +225,14 @@ def company_peers(con, row, cohort, as_of):
 
 
 def archived_factor_evidence(as_of):
-    from finlab.analytics.validation_view import read_validation
+    from finlab.analytics.validation_view import read_validation, validation_at_cutoff
     from finlab.config import get_settings
 
     try:
-        report = read_validation(get_settings().reports_dir / "research")
+        directory = get_settings().reports_dir / "research"
+        report = validation_at_cutoff(directory, as_of) or read_validation(directory)
         if not isinstance(report, dict) or not str(report.get("version")).startswith(
-            "signal-research-v3"
+            "signal-research-"
         ):
             return dict(status="archive_unavailable", factors={})
         end = date.fromisoformat(report["end"])
@@ -253,11 +254,15 @@ def archived_factor_evidence(as_of):
         start=report.get("start"),
         end=report["end"],
         horizon_sessions=21,
+        study_version=report.get("version"),
+        held_out=bool(report.get("test_start")),
         factors=factors,
     )
 
 
 def financial_context(con, row, as_of, cohort):
+    from finlab.analytics.sentiment import sentiment_context
+
     tables = set(attached_views(con))
     return dict(
         version="financial-context-v5.1",
@@ -270,8 +275,8 @@ def financial_context(con, row, as_of, cohort):
         if {"price_daily", "security", "entity"} <= tables
         else {"status": "unavailable", "comparisons": {}},
         predictive_evidence=archived_factor_evidence(as_of),
+        sentiment=sentiment_context(con, row["security_id"], as_of, tables),
         macro=dict(status="release_vintages_unavailable"),
-        sentiment=dict(status="timestamped_source_unavailable"),
         limitations=[
             "Historical distributions summarize comparable samples, not structural change tests.",
             "SPY price observations exclude reinvested dividends. Market context describes observed conditions.",

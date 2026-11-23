@@ -98,7 +98,11 @@ def test_pending_accession_survives_the_rolling_discovery_window(discovery):
     path = financial_sync.raw_path(settings, 1)
     with gzip.open(path, "wt") as handle:
         json.dump(
-            {"filings": {"recent": {"accessionNumber": [], "form": [], "filingDate": []}}}, handle
+            {
+                "cik": 1,
+                "filings": {"recent": {"accessionNumber": [], "form": [], "filingDate": []}},
+            },
+            handle,
         )
     with pytest.raises(financial_sync.SecSyncIncomplete):
         financial_sync.sync_financials(None, settings)
@@ -171,3 +175,22 @@ def test_invalid_companyfacts_cache_preserves_checkpoint_and_recovers(discovery,
     assert financial_sync.sync_financials(None, settings) == 1
     assert state["1"]["checked_statement_accessions"] == ["new"]
     assert len(calls) == 2
+
+
+def test_a_returned_accession_with_a_different_reporting_period_is_pending(discovery):
+    settings, _, _, _ = discovery
+    path = financial_sync.raw_path(settings, 1)
+    with gzip.open(path, "rt") as handle:
+        submissions = json.load(handle)
+    submissions["filings"]["recent"]["reportDate"] = ["2025-09-30"]
+    with gzip.open(path, "wt") as handle:
+        json.dump(submissions, handle)
+    report = financial_sync.inspect_cached_financials(settings)
+    assert report["pending"][0]["reason"] == "COMPANY_FACTS_PERIOD_MISMATCH"
+
+
+def test_an_invalid_numeric_observation_is_a_durable_issuer_diagnostic(discovery):
+    settings, _, _, body = discovery
+    body["facts"]["us-gaap"]["Revenues"]["units"]["USD"][0]["val"] = "nan"
+    report = financial_sync.inspect_cached_financials(settings)
+    assert report["pending"][0]["reason"] == "COMPANY_FACTS_INVALID_OBSERVATIONS"

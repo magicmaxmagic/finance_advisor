@@ -1,4 +1,4 @@
-/** Browser-owned portfolio records. This store has no write path to DuckDB. */
+/** Local portfolio protocol and legacy browser-ledger migration. */
 export type Currency = 'USD' | 'CAD'
 export type Trade = {
   id: string; ticker: string; date: string; side: 'buy' | 'sell'; quantity: number
@@ -33,9 +33,15 @@ export function loadLedger(): Ledger {
   return result
 }
 
-export function saveLedger(ledger: Ledger) {
-  ledger.trades.forEach(trade => validateTrade(trade,ledger.base))
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(ledger))
+export type LedgerRevision = { revision: number; ledger: Ledger; updated_at: string | null }
+
+export async function serverLedger(signal?: AbortSignal, update?: { expected_revision: number; ledger: Ledger }): Promise<LedgerRevision> {
+  const response = await fetch('/api/portfolio/ledger', update ? {
+    signal, method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
+  } : { signal })
+  const body = await response.json()
+  if (!response.ok) throw Error(typeof body.detail === 'string' ? body.detail : 'Check the local portfolio service and transaction fields.')
+  return body as LedgerRevision
 }
 
 function parseLine(line: string) {

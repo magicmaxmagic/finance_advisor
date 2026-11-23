@@ -73,6 +73,19 @@ test('Overview → company → evidence → compare → discovery preset', async
 })
 
 test('portfolio records, values, edits and removes a holding without CSV', async ({ page }) => {
+  // Exercise the browser protocol while protecting the user's local portfolio database.
+  let stored = { revision:0, updated_at:null, ledger:{base:'USD',trades:[]} }
+  await page.route('**/api/portfolio/ledger', async route => {
+    if (route.request().method() === 'PUT') {
+      const update = route.request().postDataJSON()
+      if (update.expected_revision !== stored.revision) {
+        await route.fulfill({ status:409, json:{ detail:'This portfolio changed in another tab.' } })
+        return
+      }
+      stored = { ...stored, revision:stored.revision+1, ledger:update.ledger }
+    }
+    await route.fulfill({ json:stored })
+  })
   await page.goto(`/${historical}#portfolio/AAPL`)
   await page.getByLabel('Company name or ticker').fill('AAPL')
   await page.getByLabel('Transaction date').fill('2020-01-02')
@@ -83,6 +96,7 @@ test('portfolio records, values, edits and removes a holding without CSV', async
   await expect(page.getByRole('heading', { name: 'Positions and risk' })).toBeVisible()
   await expect(page.getByText('$1,000.00', { exact: true })).toBeVisible()
   await capture(page, 'portfolio-1440')
+  await page.evaluate(() => localStorage.clear())
   await page.reload()
   await page.getByRole('button', { name: 'Edit AAPL transaction' }).click()
   await page.getByLabel('Quantity', { exact: true }).fill('20')

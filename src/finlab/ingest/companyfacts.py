@@ -334,8 +334,14 @@ async def fetch_poc_universe(
             versions = list(previous.get("versions", []))
             payloads = [body]
             if target.exists():
-                with gzip.open(target, "rb") as old_handle:
-                    payloads.append(old_handle.read())
+                try:
+                    with gzip.open(target, "rb") as old_handle:
+                        cached = old_handle.read()
+                    decode_sec_json(cached, company.cik)
+                except (OSError, EOFError, SecPayloadError):
+                    pass  # A malformed cache must not prevent replacement by a verified response.
+                else:
+                    payloads.append(cached)
             for payload in payloads:
                 digest = hashlib.sha256(payload).hexdigest()
                 blob = blobs / f"{digest}.json.gz"
@@ -357,6 +363,8 @@ async def fetch_poc_universe(
                 "source_url": companyfacts_url(company.cik),
                 "versions": versions,
                 "checked_statement_accessions": previous.get("checked_statement_accessions", []),
+                "verified_amendments": previous.get("verified_amendments", []),
+                "statements_checked_at": previous.get("statements_checked_at"),
                 "sha256": hashlib.sha256(body).hexdigest(),
                 "bytes": len(body),
                 "fetched_at": datetime.now(UTC).isoformat(),
@@ -643,12 +651,35 @@ def parse_all(
     names: dict[int, str] = {}
 
     def stream() -> Iterator[tuple]:
+        from finlab.ingest.statement_recovery import load_recovery
+
+        accession, period, filed, form = (
+            FACT_COLUMNS.index(key)
+            for key in ("accession_number", "period_end", "filed_date", "form")
+        )
         for company in companies:
             if not raw_path(settings, company.cik).is_file():
                 continue
             payload = read_raw(settings, company.cik)
             names[company.cik] = str(payload.get("entityName") or company.name)
-            yield from parse_companyfacts(payload, stats)
+            directory = settings.raw_dir / "statement_recovery" / f"{company.cik:010d}"
+            recoveries = {
+                path.name.removesuffix(".json.gz"): path for path in directory.glob("*.json.gz")
+            }
+            observed = set()
+            for row in parse_companyfacts(payload, stats):
+                if row[accession] in recoveries:
+                    observed.add((row[accession], str(row[period]), str(row[filed]), row[form]))
+                yield row
+            for path in sorted(recoveries.values()):
+                filing, _, recovered = load_recovery(path)
+                if (
+                    filing["accession"],
+                    filing["report_period"],
+                    filing["filed_date"],
+                    filing["form"],
+                ) not in observed:
+                    yield from parse_companyfacts(recovered, stats)
 
     return stream(), stats, names
 

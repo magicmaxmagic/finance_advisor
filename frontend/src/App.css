@@ -287,18 +287,32 @@ pre { max-width: 100%; overflow: auto; overflow-wrap: anywhere; color: var(--mut
 .performance-kpis span, .performance-calendar span { color: var(--muted); font-size: .86rem; }
 .performance-kpis strong { font-size: clamp(1.1rem, 2.2vw, 1.65rem); font-variant-numeric: tabular-nums; }
 .performance-summary, .performance-source { margin: 0; }
-.income-flow-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: .85rem; }
-.income-flow-wrap svg { display: block; width: 100%; min-width: 820px; }
-.income-flow-wrap text { fill: var(--text); font-size: 13px; font-weight: 600; }
-.income-flow-wrap .flow-heading { fill: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
-.income-flow-wrap tspan { fill: var(--muted); font-weight: 500; }
-.income-flow-wrap rect { fill: var(--muted); }
-.flow-ribbon { opacity: .52; cursor: pointer; stroke: transparent; }
-.flow-retained { fill: #bf9c5c; }
-.flow-income { fill: #55a48e; }
-.flow-cost { fill: #8594ae; }
-.flow-ribbon.flow-active, .flow-ribbon:focus-visible { opacity: .95; stroke: var(--text); stroke-width: 1; }
-.income-flow-key { min-height: 1.5em; margin: 0; font-size: .85rem; }
+.performance-title h3 { font-size: clamp(1.5rem, 3.1vw, 2.25rem); font-weight: 650; letter-spacing: -.035em; margin-bottom: .3rem; }
+.performance-title p, .sankey-caption { margin: 0; color: var(--muted); }
+.performance-kpis small { color: var(--muted); font-size: .78rem; }
+.performance-kpis > div { padding: .6rem .85rem; }
+.financial-sankey { margin: 0; min-width: 0; }
+.sankey-tools, .sankey-dialog header { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: .85rem; }
+.sankey-tools > div { display: flex; flex-wrap: wrap; gap: .35rem; }
+.sankey-tools ul { display: flex; flex-wrap: wrap; gap: .65rem 1rem; margin: 0; padding: 0; list-style: none; }
+.sankey-tools li { display: inline-flex; align-items: center; gap: .35rem; font-size: .83rem; color: var(--muted); }
+.sankey-tools i { width: .6rem; height: .6rem; border-radius: .2rem; }
+.income-flow-wrap { overflow-x: auto; max-width: 100%; border-radius: .8rem; scrollbar-color: #72839c #1b222c; }
+.income-flow-wrap svg { display: block; width: 100%; min-width: 950px; }
+.sankey-stream, .sankey-node { cursor: pointer; transition: opacity 150ms ease; }
+.sankey-stream:focus-visible, .sankey-node:focus-visible { outline: 2px solid #d6e1f0; }
+.sankey-caption { display: flex; flex-wrap: wrap; gap: .35rem .75rem; align-items: baseline; margin-top: .65rem; font-size: .82rem; }
+.sankey-swipe { display: none; }
+.sankey-evidence { display: grid; gap: .45rem; padding: .8rem; margin-top: .65rem; border-left: 2px solid var(--accent); background: var(--surface-raised); }
+.sankey-evidence > div { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline; }
+.sankey-evidence p { margin: 0; }
+.sankey-evidence button { justify-self: start; }
+.sankey-dialog { color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); width: min(96vw, 1440px); max-width: 96vw; padding: clamp(.75rem, 1.8vw, 1.5rem); }
+.sankey-dialog::backdrop { background: #080b10d9; }
+.statement-disclosure { border-top: 1px solid var(--line); padding: .7rem 0 0; }
+.statement-disclosure summary { cursor: pointer; }
+@media (max-width: 1240px) { .sankey-swipe { display: inline; } }
+@media (prefers-reduced-motion: reduce) { .sankey-stream, .sankey-node { transition: none; } }
 .statement-table caption { text-align: left; color: var(--muted); padding: .6rem 0; }
 .statement-table td:first-of-type, .statement-table td:nth-of-type(2) { font-variant-numeric: tabular-nums; }
 .performance-calendar { border-top: 1px solid var(--line); padding-top: .8rem; }
@@ -310,7 +324,29 @@ pre { max-width: 100%; overflow: auto; overflow-wrap: anywhere; color: var(--mut
 }
 @media print {
   .company-financial-performance { scroll-margin-top: 0; }
+  .company-financial-performance:has(.financial-sankey) { break-before: page; }
   .company-financial-performance > header button, .performance-controls, .performance-calendar button { display: none; }
   .income-flow-wrap { overflow: visible; break-inside: avoid; }
   .income-flow-wrap svg { min-width: 0; }
+  .performance-title, .performance-kpis, .sankey-tools { break-after: avoid; }
+  .sankey-tools > div, .sankey-swipe, .sankey-evidence { display: none; }
 }
+
+.calendar-view .toolbar { align-items: end; margin-bottom: .9rem; }
+.calendar-view .toolbar label { display: grid; gap: .25rem; max-width: 100%; }
+.calendar-view .toolbar select { max-width: 100%; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .32rem; margin-bottom: 1rem; }
+.calendar-grid > small { padding: .3rem .55rem; color: var(--muted); }
+.calendar-grid button { display: flex; min-height: 3.1rem; justify-content: space-between; align-items: start; gap: .2rem; padding: .45rem; }
+.calendar-grid button small { color: var(--accent); }
+.calendar-list { padding: 0; list-style: none; }
+.calendar-list li { display: flex; justify-content: space-between; gap: .7rem; padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.calendar-list li > div { display: grid; align-content: start; gap: .25rem; }
+.calendar-list span { color: var(--muted); font-size: .83rem; }
+@media (max-width: 550px) {
+  .calendar-grid button { flex-direction: column; }
+  .calendar-grid > small { padding: .3rem .1rem; text-align: center; }
+  .calendar-list li { flex-direction: column; }
+}
+
+#company-assessment-summary, #company-research-details { scroll-margin-top: 8rem; }

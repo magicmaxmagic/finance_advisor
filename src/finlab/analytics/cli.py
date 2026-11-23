@@ -250,6 +250,7 @@ def validate_signals(
         None, help="Freeze selection before this final test cutoff."
     ),
     baseline_report: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
+    expanded: bool = False,
 ) -> None:
     """Archive factor, ablation and walk-forward signal research."""
     from datetime import date
@@ -269,6 +270,7 @@ def validate_signals(
             rolling=rolling,
             test_start=date.fromisoformat(test_start) if test_start else None,
             baseline_report=baseline_report,
+            expanded=expanded,
         )
     )
 

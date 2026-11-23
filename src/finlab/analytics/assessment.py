@@ -437,9 +437,15 @@ def company_assessment(identity: str, as_of: date, *, weights=None, comparisons=
         row["decision_research"] = {
             key: {"rule": RULES[key], "observed": value} for key, value in observed.items()
         }
+        from finlab.analytics.decision_context import decision_context
         from finlab.analytics.financial_context import financial_context
+        from finlab.analytics.validation_view import validation_at_cutoff
 
         row["financial_context"] = financial_context(con, row, as_of, cohort)
+        held_out = validation_at_cutoff(
+            config.get_settings().reports_dir / "research", as_of, held_out_only=True
+        )
+        row["decision_context"] = decision_context(row, raw, held_out)
         row["correlation_diagnostics"] = redundancy_diagnostics(cohort, row["financial_issuer"])
         row["published_at"] = con.execute(
             "SELECT published_at FROM _warehouse_publication"

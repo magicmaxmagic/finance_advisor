@@ -42,9 +42,11 @@ def _load_report(path: Path, revision: int):
     return json.loads(path.read_text())
 
 
-def read_validation(directory: Path, *, holdout=False):
+def read_validation(directory: Path, *, holdout=False, study=None):
     names = (
-        ("validation-v6-latest.json",)
+        (f"validation-{study}-latest.json",)
+        if study in {"v7", "v8"}
+        else ("validation-v6-latest.json",)
         if holdout
         else (
             "validation-v3-latest.json",
@@ -57,6 +59,23 @@ def read_validation(directory: Path, *, holdout=False):
             revision = path.stat().st_mtime_ns
             return _load_report(path, revision)
         except FileNotFoundError:
+            continue
+    return None
+
+
+def validation_at_cutoff(directory: Path, as_of: date, *, held_out_only=False):
+    for study in ("v8", "v7", "v6", "v3"):
+        if held_out_only and study == "v3":
+            break
+        try:
+            report = (
+                read_validation(directory)
+                if study == "v3"
+                else read_validation(directory, holdout=study == "v6", study=study)
+            )
+            if report and report.get("end") and date.fromisoformat(report["end"]) <= as_of:
+                return report
+        except (OSError, KeyError, ValueError, TypeError, AttributeError):
             continue
     return None
 
@@ -97,7 +116,9 @@ def summarize_validation(report: dict) -> dict:
 def validation_series(report: dict, horizon: int, series: str) -> dict:
     """Project one archived outcome series and suppress curves with unresolved gaps."""
     windows = report.get("folds", {}).get(str(horizon), [])
-    if not report.get("version", "").startswith(("signal-research-v3", "signal-research-v6")):
+    if not report.get("version", "").startswith(
+        ("signal-research-v3", "signal-research-v6", "signal-research-v7", "signal-research-v8")
+    ):
         return dict(
             windows=[], portfolio=[], reason="Archived window data is unavailable in this report."
         )

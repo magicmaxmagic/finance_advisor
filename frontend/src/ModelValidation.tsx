@@ -9,7 +9,8 @@ type Evidence = { status: string; label: string; reason: string }
 type Series = { windows: { date:string; ic:number|null; turnover:number|null; available:number|null; matched:number|null }[]
   portfolio: { date:string; wealth:number; benchmark:number; drawdown:number; benchmark_drawdown:number }[]; reason?:string|null }
 type DecisionEvidence = { rule: string; eligible: number; matched: number; flagged: number; windows: Record<string, Statistic> }
-type StudySection = { models: Record<string, Signature>; factors: Record<string, Signature>; decision_evidence?: Record<string, DecisionEvidence> }
+type StudySection = { models: Record<string, Signature>; factors: Record<string, Signature>; decision_evidence?: Record<string, DecisionEvidence>;
+  matched_baseline?: { windows: number; availability_delta: number; paired_rank_ic_change: Statistic; paired_net_excess_change: Statistic } }
 type Result = { headline?: Evidence; model_evidence?: Record<string,Record<string,Evidence>>; universe_count?:number|null
   params?: { cost_bps:number }; version?: string; model_version?: string; start?: string; end?: string; test_start?: string; reason?: string; warehouse_epoch?: string; limitations?: string[]; summary?: Record<string, StudySection | Record<string, Legacy>> }
 
@@ -21,6 +22,7 @@ const titles: Record<string, string> = {
   fundamental_technical: 'Fundamental + technical', fundamental_risk: 'Fundamental + risk',
   fundamental_heavy: 'Fundamental heavy', technical_heavy: 'Technical heavy',
   technical_risk: 'Technical + risk', equal_dimensions: 'Equal dimension weights',
+  value_only: 'Value only', quality_only: 'Business quality only', growth_only: 'Growth only',
 }
 
 export function ModelValidation() {
@@ -79,7 +81,8 @@ export function ModelValidation() {
     <section className="panel validation-lead"><span className="eyebrow">HISTORICAL EVIDENCE</span><h2>Does the scoring model actually work?</h2>
       <label className="date-control">Validation study<select value={study} onChange={event => {
         setStudy(event.target.value); setChosen('opportunity'); setReport(null)
-      }}><option value="v3">V3 historical baseline</option><option value="v6">V6 held-out evaluation</option></select></label>
+      }}><option value="v3">V3 historical baseline</option><option value="v6">V6 held-out evaluation</option>
+        <option value="v7">V7 matched-universe study</option><option value="v8">V8 factor and model study</option></select></label>
       <strong className={`evidence-chip ${evidence?.status ?? 'insufficient'}`}>{evidence?.label ?? 'Insufficient evidence'}</strong>
       <p>{evidence?.reason ?? 'A dependence-aware study is unavailable for this selection.'}</p>
       <p>Research scores summarize relative valuation, business quality, market conditions, and resilience. Rank IC measures how those ranks related to later returns. The score is not a probability.</p>
@@ -90,6 +93,11 @@ export function ModelValidation() {
       {fees != null && <p>Trading cost {fees} basis points per side{turnover != null && ` · ${pct(turnover)} two-sided turnover per completed window`}.</p>}
     </section>
     {section && <>
+      {section.matched_baseline && 'windows' in section.matched_baseline && <section className="panel"><h2>Same companies, same dates</h2>
+        <p>{section.matched_baseline.windows} comparison windows · {section.matched_baseline.availability_delta} additional score-eligible company-windows across the full sample.</p>
+        <p>Matched-sample change in rank IC {value(section.matched_baseline.paired_rank_ic_change.mean)}
+          {section.matched_baseline.paired_rank_ic_change.confidence_95 && ` · 95% interval ${section.matched_baseline.paired_rank_ic_change.confidence_95.map(value).join(' to ')}`}
+          {' · '}Net benchmark-excess change {pct(section.matched_baseline.paired_net_excess_change.mean)}.</p></section>}
       <section className="panel">
         <div className="section-heading"><div><h2>Model comparison</h2><p>Higher rank IC means stronger alignment between ranks and later returns.</p></div>
           <label className="date-control">Forward horizon<select value={horizon} onChange={event => setHorizon(event.target.value)}>

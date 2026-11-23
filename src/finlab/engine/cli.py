@@ -172,6 +172,35 @@ def stage_events(document: Annotated[Path, typer.Argument(exists=True, dir_okay=
     typer.echo(f"Staged {count} official calendar observations.")
 
 
+@app.command("stage-revenue-breakdown")
+def stage_revenue(accession: str) -> None:
+    """Extract revenue from SEC filing bytes already archived by Data Engine."""
+    import hashlib
+    import re
+
+    from finlab.ingest.revenue_breakdown import stage_revenue_breakdown
+
+    settings = get_settings()
+    if not re.fullmatch(r"[0-9]{10}-[0-9]{2}-[0-9]{6}", accession):
+        raise typer.BadParameter("An SEC accession number is required.")
+    documents = list((settings.raw_dir / "filing_documents").glob(f"{accession}-*.htm"))
+    if len(documents) != 1:
+        raise typer.BadParameter(
+            "This accession requires exactly one known SEC document in the local archive."
+        )
+    source = documents[0].read_bytes()
+    if documents[0].stem != f"{accession}-{hashlib.sha256(source).hexdigest()}":
+        raise typer.BadParameter(
+            "The local SEC document digest does not match its archived identity."
+        )
+    try:
+        with write_conn(settings) as con:
+            count = stage_revenue_breakdown(con, settings, accession, source)
+    except (ValueError, WriterLockHeld) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"Staged {count} reconciled revenue observations.")
+
+
 @app.command("publish-evidence")
 def publish_evidence() -> None:
     """Extend the current epoch with staged evidence while holding core datasets fixed."""
@@ -193,7 +222,7 @@ def publish_evidence() -> None:
                 if not files:
                     continue
                 has_evidence = True
-                if name == "financial_event":
+                if name in {"financial_event", "financial_text"}:
                     check = "SELECT count(*) FROM read_parquet(?) s ANTI JOIN entity e USING(cik)"
                 else:
                     check = """SELECT count(*) FROM read_parquet(?) s ANTI JOIN filing f
@@ -212,6 +241,27 @@ def publish_evidence() -> None:
             evidence_base=base,
         )
     typer.echo(f"Published evidence epoch {snapshot.epoch}; frozen financial base {base.epoch}.")
+
+
+@app.command("sync-financial-news")
+def sync_financial_news() -> None:
+    """Archive the reviewed SEC earnings releases for local tone analysis."""
+    import asyncio
+
+    import httpx
+
+    from finlab.ingest.financial_text import acquire_earnings_text
+    from finlab.ingest.sec import SecEtiquetteError, sec_failure
+
+    settings = get_settings()
+    try:
+        with write_conn(settings) as con:
+            count, unavailable = asyncio.run(acquire_earnings_text(con, settings))
+    except (SecEtiquetteError, WriterLockHeld) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise typer.BadParameter(f"SEC releases unavailable: {sec_failure(exc).code}") from exc
+    typer.echo(f"Staged {count} reviewed SEC narratives; {unavailable} unavailable.")
 
 
 if __name__ == "__main__":

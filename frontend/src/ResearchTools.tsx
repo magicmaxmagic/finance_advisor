@@ -141,6 +141,7 @@ type Job = { name:string; state:string; detail:string; finished_at?:string|null;
 type EngineState = { updated_at:string|null; pipeline_state:string; steps:Job[]; recent_jobs?:Job[];
   sec_sync?: { state: string; stale: boolean; last_success_at?: string | null;
     pending: { cik: number; ticker: string; accession: string; filed_date: string; reason?: string; report_period?: string; inline_xbrl?: boolean }[];
+    verified_recoveries?: Record<string, { ticker: string; accession: string; source_url: string; observation_count: number }>;
     issuer_errors: Record<string, { code: string; retryable: boolean }> } }
 type QualityState = { scope: string; rows: { ticker: string; status: string; missing_sessions?: string[] }[] }
 type FinancialMetricCoverage = { available: number; coverage_pct: number|null; main_missing_reason: string|null;
@@ -149,7 +150,7 @@ type FinancialMetricCoverage = { available: number; coverage_pct: number|null; m
 type FinancialCoverage = { samples: Record<string, { business_models: Record<string, { eligible: number; metric_coverage: Record<string, FinancialMetricCoverage> }> }> }
 const auditedMeasures = {
   annual_statement: 'Annual statements', reported_shares: 'Reported share counts', reported_market_cap: 'Historical market capitalization',
-  trailing_pe: 'Fiscal-year P/E', ev_to_operating_ebitda: 'EV / EBITDA', roic: 'Return on invested capital',
+  trailing_pe: 'Fiscal-year P/E', ttm_pe: 'Trailing 12-month P/E', ev_to_operating_ebitda: 'EV / EBITDA', roic: 'Return on invested capital',
   fcf_yield: 'Free cash flow yield', revenue_growth: 'Revenue growth', earnings_growth: 'Earnings growth',
   debt_to_equity: 'Debt / equity', interest_coverage: 'Interest coverage',
   nonoperating_interest_coverage: 'Nonoperating interest coverage', current_ratio: 'Current ratio',
@@ -177,20 +178,15 @@ export function DataCenterControls({ publication, asOf }: { publication?: string
     setBusy(true); setMessage('')
     try {
       const cutoff = asOf ? `?as_of=${encodeURIComponent(asOf)}` : ''
-      const responses = await Promise.allSettled([
-        fetch('/api/data/status'), fetch(`/api/warehouse/quality${cutoff}`),
-        fetch(`/api/warehouse/financial-coverage${cutoff}`),
-      ])
-      for (const [index, response] of responses.entries()) {
-        if (response.status === 'rejected' || !response.value.ok) {
-          setMessage('Some coverage details are unavailable.')
-          continue
-        }
-        const data = await response.value.json()
-        if (index === 0) setStatus(data)
-        if (index === 1) setQuality(data)
-        if (index === 2) setFinancial(data)
-      }
+      const results = await Promise.allSettled(([
+        ['/api/data/status', setStatus], [`/api/warehouse/quality${cutoff}`, setQuality],
+        [`/api/warehouse/financial-coverage${cutoff}`, setFinancial],
+      ] as const).map(async ([url, apply]) => {
+        const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        apply(await response.json())
+      }))
+      if (results.some(result => result.status === 'rejected')) setMessage('Some coverage details are unavailable. Retry to check current data.')
     } catch (reason) { setMessage(String(reason)) }
     finally { setBusy(false) }
   }
@@ -206,6 +202,7 @@ export function DataCenterControls({ publication, asOf }: { publication?: string
     : needsAttention ? 'Needs attention' : state === 'running' ? 'Working' : state === 'done' ? 'Completed' : state.replaceAll('_',' ')
   const jobs = status?.recent_jobs ?? []
   const sec = status?.sec_sync
+  const recoveries = Object.values(sec?.verified_recoveries ?? {})
   const [financialDate, sample] = Object.entries(financial?.samples ?? {})[0] ?? []
   const metrics = sample?.business_models.all.metric_coverage
   const affected = metrics?.[selectedMetric]
@@ -222,6 +219,9 @@ export function DataCenterControls({ publication, asOf }: { publication?: string
       <p>{sec.last_success_at ? `Last verified SEC synchronization ${new Date(sec.last_success_at).toLocaleString('en-US')}.` : 'No verified SEC synchronization has been recorded.'}
         {sec.stale && ' The verification status is stale.'}</p>
       <p>{sec.pending.length} pending statements · {Object.keys(sec.issuer_errors).length} issuer errors.</p>
+      {recoveries.length > 0 && <details><summary>{recoveries.length} statements verified from primary SEC filings</summary>
+        <ul>{recoveries.map(item => <li key={item.accession}><a href={item.source_url} target="_blank" rel="noreferrer">{item.ticker} {item.accession}</a> · {item.observation_count} consolidated observations</li>)}</ul>
+      </details>}
       {(sec.pending.length > 0 || Object.keys(sec.issuer_errors).length > 0) && <details><summary>SEC issuer diagnostics</summary>
         <ul>{sec.pending.map(item => <li key={item.accession}>{item.ticker} · filed {item.filed_date}{item.report_period && ` · period ended ${item.report_period}`} · {item.accession}
           {item.inline_xbrl && ' · Inline XBRL confirmed'} · {item.reason === 'ACCESSION_MISSING_IN_COMPANY_FACTS' ? 'No normalized observations for this accession in SEC Company Facts' : item.reason ?? 'Awaiting verification'}</li>)}
